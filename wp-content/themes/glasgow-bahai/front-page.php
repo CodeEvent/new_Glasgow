@@ -12,9 +12,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 get_header();
+$hero_image = has_header_image() ? get_header_image() : '';
 ?>
 
-<section class="hero">
+<section class="hero<?php echo $hero_image ? ' hero--photo' : ''; ?>"<?php echo $hero_image ? ' style="--hero-image:url(' . esc_url( $hero_image ) . ')"' : ''; ?>>
 	<div class="container">
 		<span class="hero__eyebrow"><?php esc_html_e( 'Baha\'i Community of Glasgow', 'glasgow-bahai' ); ?></span>
 		<h1 class="hero__title"><?php esc_html_e( 'A community building spiritual and social vitality, together.', 'glasgow-bahai' ); ?></h1>
@@ -127,6 +128,49 @@ get_header();
 		</div>
 	</div>
 </section>
+
+<?php
+$news_query = new WP_Query( array(
+	'post_type'      => 'post',
+	'posts_per_page' => 3,
+	'category__not_in' => array_filter( array( get_cat_ID( 'events' ) ) ),
+	'no_found_rows'  => true,
+) );
+if ( $news_query->have_posts() ) :
+	?>
+	<section class="section section--tight news">
+		<div class="container">
+			<div class="section-head">
+				<span class="section-head__eyebrow"><?php esc_html_e( 'From the Community', 'glasgow-bahai' ); ?></span>
+				<h2><?php esc_html_e( 'Latest news & reflections', 'glasgow-bahai' ); ?></h2>
+			</div>
+			<div class="news-grid">
+				<?php
+				while ( $news_query->have_posts() ) :
+					$news_query->the_post();
+					?>
+					<article class="news-card">
+						<?php if ( has_post_thumbnail() ) : ?>
+							<a href="<?php the_permalink(); ?>" class="news-card__media">
+								<?php the_post_thumbnail( 'glasgow-bahai-card', array( 'loading' => 'lazy' ) ); ?>
+							</a>
+						<?php endif; ?>
+						<div class="news-card__body">
+							<span class="news-card__date"><?php echo esc_html( get_the_date() ); ?></span>
+							<h3><a href="<?php the_permalink(); ?>"><?php the_title(); ?></a></h3>
+							<p><?php echo esc_html( wp_trim_words( get_the_excerpt(), 18 ) ); ?></p>
+						</div>
+					</article>
+					<?php
+				endwhile;
+				wp_reset_postdata();
+				?>
+			</div>
+		</div>
+	</section>
+	<?php
+endif;
+?>
 
 <section class="cta-band">
 	<div class="container">

@@ -24,15 +24,17 @@ if ( ! defined( 'ABSPATH' ) ) {
 				</div>
 
 				<div class="footer-col">
-					<h4><?php esc_html_e( 'Explore', 'glasgow-bahai' ); ?></h4>
-					<?php
-					wp_nav_menu( array(
-						'theme_location' => 'footer',
-						'container'      => false,
-						'menu_class'     => '',
-						'fallback_cb'    => 'glasgow_bahai_fallback_menu',
-					) );
-					?>
+					<h4 id="footer-nav-heading"><?php esc_html_e( 'Explore', 'glasgow-bahai' ); ?></h4>
+					<nav aria-labelledby="footer-nav-heading">
+						<?php
+						wp_nav_menu( array(
+							'theme_location' => 'footer',
+							'container'      => false,
+							'menu_class'     => '',
+							'fallback_cb'    => 'glasgow_bahai_fallback_menu',
+						) );
+						?>
+					</nav>
 				</div>
 
 				<div class="footer-col">

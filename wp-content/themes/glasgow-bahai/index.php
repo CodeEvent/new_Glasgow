@@ -12,7 +12,19 @@ get_header();
 
 <div class="page-hero">
 	<div class="container">
-		<h1><?php esc_html_e( 'News & Reflections', 'glasgow-bahai' ); ?></h1>
+		<h1>
+			<?php
+			if ( is_search() ) {
+				printf(
+					/* translators: %s: search query */
+					esc_html__( 'Search results for: %s', 'glasgow-bahai' ),
+					'<span>' . esc_html( get_search_query() ) . '</span>'
+				);
+			} else {
+				esc_html_e( 'News & Reflections', 'glasgow-bahai' );
+			}
+			?>
+		</h1>
 	</div>
 </div>
 
