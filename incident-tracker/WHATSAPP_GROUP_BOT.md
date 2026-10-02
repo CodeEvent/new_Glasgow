@@ -4,13 +4,20 @@ Stewards log and check refused patrons entirely inside your **work WhatsApp grou
 
 | A steward sends | Gatekeeper replies |
 |---|---|
-| a photo of the customer's Ticketmaster QR, or of the customer, captioned `REFUSED 52 YY 14 West green hat, very drunk` | ✅ Logged 🔴 REFUSED · 52 YY 14 · West Hub 18:45 |
-| `30 52 YY 14 West swaying` | ✅ Logged 🟠 SENT AWAY 30 MIN · 52 YY 14 · back after 19:15 |
+| a photo of the customer's Ticketmaster QR, or of the customer, captioned `REFUSED 52 YY 14 West` | asks the reason, male/female, build and clothing, then ✅ Logged 🔴 REFUSED · 52 YY 14 · West Hub 18:45 |
+| `30 52 YY 14 West 1 M 2 green hat` (all in one go) | ✅ Logged 🟠 SENT AWAY 30 MIN · 52 YY 14 · back after 19:15 |
 | `52 YY 14` | 🔴 REFUSED … with the description, who logged it, where and when, plus the photo |
 | `52 YY 14` (nothing logged) | ✅ NOT REFUSED |
 | a log for a seat already flagged at another hub | 🚨 ALREADY REFUSED … second attempt, ⛔ do not admit |
 
-If a log is missing the decision, seat, hub or reason, the bot asks for it. The time is added automatically. Each steward's hub is remembered for the night. `UNDO` removes your last record, `CANCEL` stops a half-finished log, and `HELP` shows the commands.
+If a log is missing anything, the bot asks for it, one question at a time, with numbered options:
+
+- **Reason:** 1 Intoxicated · 2 Abusive · 3 Under the influence · 4 Intoxicated minor · 5 Found in possession · 6 Other (then "What happened?")
+- **Male or female:** M or F
+- **Build:** 1 Slim · 2 Average · 3 Heavy
+- **What they're wearing:** free text
+
+Reply `-` to skip a description question. Quick stewards can put it all on one line: decision, seat, hub, reason, M/F, build, clothing, e.g. `REFUSED 52 YY 14 West 1 M 2 green hat`. The time is added automatically. Each steward's hub is remembered for the night. `UNDO` removes your last record, `CANCEL` stops a half-finished log, and `HELP` shows the commands.
 
 **Everything is deleted automatically after 24 hours.**
 
@@ -95,7 +102,7 @@ The link is stored in the database, so it survives restarts and redeploys. You o
 ## 5. Try it in the group
 
 1. `HELP` shows the commands.
-2. `30 52 YY 14 West testing`: you should get ✅ Logged 🟠 SENT AWAY.
+2. `30 52 YY 14 West 1 -` (`-` skips the description): you should get ✅ Logged 🟠 SENT AWAY.
 3. `52 YY 14`: you should get 🟠 SENT AWAY with minutes left.
 4. `UNDO` removes the test record.
 

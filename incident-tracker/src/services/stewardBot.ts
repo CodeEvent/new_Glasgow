@@ -12,8 +12,9 @@ import { getTicketProfile, getTicketProfileBySeat } from './ticketLookup';
  * The WhatsApp-only steward flow.
  *
  *  Log:   a photo (Ticketmaster QR or the customer) and/or text such as
- *         "REFUSED BB 212 100 West green hat, very drunk"  or  "30 BB 212 100 ...".
- *         Anything missing (decision, seat, hub, reason) is asked for, one question at a time.
+ *         "REFUSED 52 YY 14 West 1 M 2 green hat"  or  "30 52 YY 14 ...".
+ *         Anything missing (decision, seat, hub, reason, then the description: male/female,
+ *         build, clothing) is asked for, one question at a time, with numbered options.
  *         The time is the message time. Each steward's hub is remembered.
  *  Check: "BB 212 100" -> refused / sent away / not on record, with the photo if there is one.
  *  Also:  UNDO (remove your last new record), CANCEL (drop a half-finished log), HELP.
@@ -56,16 +57,102 @@ export function parseHub(word: string): Hub | null {
   return HUBS.find((h) => h.toLowerCase().startsWith(k)) ?? null;
 }
 
-export interface ParsedLog {
+export const REASONS = ['Intoxicated', 'Abusive', 'Under the influence', 'Intoxicated minor', 'Found in possession', 'Other'] as const;
+export type Reason = (typeof REASONS)[number];
+export const BUILDS = ['Slim', 'Average', 'Heavy'] as const;
+
+const SEP = /^[\s,.:;]*/;
+const REASON_WORDS: Array<[RegExp, Reason]> = [
+  [/^\s*(?:intox(?:icated)?\s+minor|minor)\b/i, 'Intoxicated minor'],
+  [/^\s*(?:intoxicated|intox)\b/i, 'Intoxicated'],
+  [/^\s*(?:abusive|abuse)\b/i, 'Abusive'],
+  [/^\s*(?:under\s+the\s+influence|under\s+influence|uti)\b/i, 'Under the influence'],
+  [/^\s*(?:found\s+in\s+possession|possession|fip)\b/i, 'Found in possession'],
+  [/^\s*other\b/i, 'Other'],
+];
+const BUILD_WORDS: Array<[RegExp, (typeof BUILDS)[number]]> = [
+  [/^\s*(?:slim|thin|skinny)\b/i, 'Slim'],
+  [/^\s*(?:average|medium)\b/i, 'Average'],
+  [/^\s*(?:heavy|large|big|stocky)\b/i, 'Heavy'],
+];
+
+type Take<T> = [T, string] | null;
+const after = (s: string, used: number) => s.slice(used).replace(SEP, '');
+
+function takeReason(s: string): Take<Reason> {
+  const n = /^\s*([1-6])(?=[\s,.:;]|$)/.exec(s);
+  if (n) return [REASONS[Number(n[1]) - 1], after(s, n[0].length)];
+  for (const [re, r] of REASON_WORDS) {
+    const m = re.exec(s);
+    if (m) return [r, after(s, m[0].length)];
+  }
+  return null;
+}
+
+function takeGender(s: string): Take<string> {
+  const m = /^\s*(male|female|man|woman|m|f)\b/i.exec(s);
+  return m ? [/^(f|female|woman)$/i.test(m[1]) ? 'Female' : 'Male', after(s, m[0].length)] : null;
+}
+
+function takeBuild(s: string, allowDigit: boolean): Take<string> {
+  const n = allowDigit ? /^\s*([1-3])(?=[\s,.:;]|$)/.exec(s) : null;
+  if (n) return [BUILDS[Number(n[1]) - 1], after(s, n[0].length)];
+  for (const [re, b] of BUILD_WORDS) {
+    const m = re.exec(s);
+    if (m) return [b, after(s, m[0].length)];
+  }
+  return null;
+}
+
+type DetailField = 'reason' | 'gender' | 'build' | 'clothing';
+
+export interface Details {
+  reason?: Reason;
+  gender?: string; // '' = skipped
+  build?: string; // '' = skipped
+  clothing?: string; // '' = skipped
+}
+
+/**
+ * "1 M 2 green hat" -> reason, gender, build, clothing, in that order, each optional,
+ * starting at `from`. A trailing "-" skips whatever description is still missing.
+ */
+export function parseDetails(text: string, from: DetailField = 'reason'): Details {
+  const order: DetailField[] = ['reason', 'gender', 'build', 'clothing'];
+  const at = (f: DetailField) => order.indexOf(f) >= order.indexOf(from);
+  const out: Details = {};
+  let s = text;
+  if (at('reason')) {
+    const r = takeReason(s);
+    if (r) [out.reason, s] = r;
+  }
+  if (at('gender')) {
+    const g = takeGender(s);
+    if (g) [out.gender, s] = g;
+  }
+  if (at('build')) {
+    // A bare digit only means a build right after M/F, or as the answer to "Build?".
+    const b = takeBuild(s, from === 'build' || out.gender !== undefined);
+    if (b) [out.build, s] = b;
+  }
+  const left = s.trim();
+  if (/^[-–—]+$/.test(left)) {
+    for (const f of ['gender', 'build', 'clothing'] as const) if (at(f) && out[f] === undefined) out[f] = '';
+  } else if (left) {
+    out.clothing = left.replace(/^[-–—:]\s*/, '').slice(0, 300);
+  }
+  return out;
+}
+
+export interface ParsedLog extends Details {
   decision?: Decision;
   section?: string;
   row?: string;
   seat?: string;
   hub?: Hub;
-  notes?: string;
 }
 
-/** "REFUSED BB 212 100 West green hat, very drunk" -> parts. Returns null if it doesn't start with a decision. */
+/** "REFUSED 52 YY 14 West 1 M 2 green hat" -> parts. Returns null if it doesn't start with a decision. */
 export function parseLogCommand(text: string | null | undefined): ParsedLog | null {
   if (!text) return null;
   const d = DECISION_RE.exec(text);
@@ -89,10 +176,7 @@ export function parseLogCommand(text: string | null | undefined): ParsedLog | nu
     out.hub = parseHub(h[1])!;
     rest = rest.slice(h[0].length);
   }
-  const notes = rest.trim();
-  if (/^[-–—]+$/.test(notes)) out.notes = ''; // "-" means: no reason to add
-  else if (notes) out.notes = notes.replace(/^[-–—:]\s*/, '').slice(0, 500);
-  return out;
+  return Object.assign(out, parseDetails(rest));
 }
 
 /** A bare seat as an answer to "which seat?": "BB 212 100", "BB/212/100", "Section BB Row 212 Seat 100". */
@@ -104,9 +188,10 @@ export function parseSeatAnswer(text: string): Pick<ParsedLog, 'section' | 'row'
 
 // ---------------------------------------------------------------- conversation state
 
-type Field = 'decision' | 'seat' | 'hub' | 'reason';
+type Field = 'decision' | 'seat' | 'hub' | 'reason' | 'other' | 'gender' | 'build' | 'clothing';
 
 interface Pending extends ParsedLog {
+  otherReason?: string; // what happened, when the reason is "Other" ('' = skipped)
   ticketCode?: string;
   photo?: { data: Buffer; mime: string };
   asked?: Field;
@@ -127,7 +212,14 @@ const PROMPTS: Record<Field, string> = {
   decision: 'Refused or sent away for 30 minutes? Reply *REFUSED* or *30*.',
   seat: 'Which seat? Send section, row and seat, e.g. *52 YY 14*.',
   hub: 'Which hub are you at? *East*, *West*, *South* or *Hospitality*.',
-  reason: 'Reason? e.g. *green hat, very drunk*. Reply *-* to skip.',
+  reason:
+    'Reason? Reply with a number:\n' +
+    REASONS.map((r, i) => `*${i + 1}* ${r}`).join('\n') +
+    '\n_Tip: add the description too, e.g. *1 M 2 green hat*_',
+  other: 'What happened? Reply *-* to skip.',
+  gender: 'Male or female? Reply *M* or *F* (*-* to skip).',
+  build: `Build? Reply with a number:\n${BUILDS.map((b, i) => `*${i + 1}* ${b}`).join('\n')}\n(*-* to skip)`,
+  clothing: 'What are they wearing? e.g. *green hat, black jacket*. Reply *-* to skip.',
 };
 
 export class StewardBot {
@@ -216,8 +308,17 @@ export class StewardBot {
       const h = parseHub(text);
       if (h && text.replace(HUB_RE, '').trim() === '') return (p.hub = h), true;
     }
-    if (asked === 'reason') {
-      p.notes = text === '-' ? '' : text.slice(0, 500);
+    if (asked === 'other') {
+      p.otherReason = /^[-–—]+$/.test(text) ? '' : text.slice(0, 300);
+      return true;
+    }
+    if (asked === 'gender' || asked === 'build' || asked === 'clothing') {
+      if (/^[-–—]+$/.test(text)) return (p[asked] = ''), true; // skip just this question
+    }
+    if (asked === 'reason' || asked === 'gender' || asked === 'build' || asked === 'clothing') {
+      const d = asked === 'clothing' ? { clothing: text.slice(0, 300) } : parseDetails(text, asked);
+      if (d[asked] === undefined) return false;
+      Object.assign(p, defined(d));
       return true;
     }
     return false;
@@ -227,7 +328,11 @@ export class StewardBot {
     if (!p.decision) return 'decision';
     if (!p.seat) return 'seat';
     if (!p.hub && !this.rememberedHub(senderId)) return 'hub';
-    if (p.notes === undefined) return 'reason';
+    if (!p.reason) return 'reason';
+    if (p.reason === 'Other' && p.otherReason === undefined) return 'other';
+    if (p.gender === undefined) return 'gender';
+    if (p.build === undefined) return 'build';
+    if (p.clothing === undefined) return 'clothing';
     return null;
   }
 
@@ -255,7 +360,8 @@ export class StewardBot {
       hub_location: hub,
       steward_name: (m.senderName || 'Steward').slice(0, 100),
       action_logged: p.decision,
-      description: p.notes || undefined,
+      description: describe(p) || undefined,
+      reasoning: reasonText(p),
       occurred_at: at.toISOString(),
     });
     if (!parsed.success) {
@@ -328,11 +434,22 @@ function defined<T extends object>(o: T): Partial<T> {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>;
 }
 
+/** "Male · Heavy build · green hat" from whatever the steward gave. */
+function describe(p: Pending): string {
+  return [p.gender, p.build && `${p.build} build`, p.clothing].filter(Boolean).join(' · ');
+}
+
+function reasonText(p: Pending): string | undefined {
+  return p.reason === 'Other' && p.otherReason ? `Other: ${p.otherReason}` : p.reason;
+}
+
 function confirmation(o: ScanOutcome, hub: Hub, p: Pending, hubWasRemembered: boolean): string {
   const t = o.ticket!;
   const seat = `${t.section ?? p.section} ${t.row_label ?? p.row} ${t.seat_number ?? p.seat}`;
   const when = formatClock(o.evaluatedAt);
-  const notes = p.notes ? `\n📝 ${sanitize(p.notes, 200)}` : '';
+  const reason = reasonText(p);
+  const desc = describe(p);
+  const notes = (reason ? `\n📝 ${sanitize(reason, 200)}` : '') + (desc ? `\n👤 ${sanitize(desc, 200)}` : '');
   const hubNote = hubWasRemembered ? `\n_Hub: ${hub} (remembered). Add EAST/WEST/SOUTH/HOSP to change._` : '';
   const origin = o.originEvent;
 
@@ -363,8 +480,11 @@ export const STEWARD_HELP =
   '🤖 *GATEKEEPER*\n\n' +
   '*Check a seat:* send section, row, seat, e.g. *52 YY 14*\n\n' +
   '*Log someone:* send a photo of their ticket QR or of them, with:\n' +
-  '• *REFUSED 52 YY 14 West green hat, very drunk*\n' +
+  '• *REFUSED 52 YY 14 West*\n' +
   '• *30 52 YY 14 West* (sent away for 30 minutes)\n' +
-  'Missing details? I’ll ask. Your hub is remembered.\n\n' +
+  'I’ll then ask the reason, male/female, build and clothing. Your hub is remembered.\n\n' +
+  '*All in one go:* *REFUSED 52 YY 14 West 1 M 2 green hat*\n' +
+  `Reasons: ${REASONS.map((r, i) => `${i + 1} ${r}`).join(' · ')}\n` +
+  `Build: ${BUILDS.map((b, i) => `${i + 1} ${b}`).join(' · ')}\n\n` +
   '*UNDO*: remove your last record · *CANCEL*: stop a log\n' +
   '_Records are deleted automatically after 24 hours._';
