@@ -27,6 +27,13 @@ describe('log message parsing', () => {
     expect(parseLogCommand('Refused')).toEqual({ decision: 'refused' });
   });
 
+  it('reads "30 min" and section-row-seat order', () => {
+    for (const d of ['30 min', '30min', '30 mins', '30 minutes']) {
+      expect(parseLogCommand(`${d} 52 YY 14 East drunk`)).toEqual({ decision: 'cool_off', section: '52', row: 'YY', seat: '14', hub: 'East Hub', notes: 'drunk' });
+    }
+    expect(parseDecision('30 min')).toBe('cool_off');
+  });
+
   it('ignores ordinary chat', () => {
     for (const t of ['really busy at the south gate', 'see you 10', 'r u there', 'sa', 'coolest night ever']) {
       expect(parseLogCommand(t)).toBeNull();

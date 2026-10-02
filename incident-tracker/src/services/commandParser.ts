@@ -47,7 +47,7 @@ export function parseCommand(text: string | undefined | null): BotCommand | null
 export const HELP_TEXT =
   '🤖 *GATEKEEPER BOT*\n\n' +
   'Send a seat to see if that person was refused:\n' +
-  '• *BB 212 100*  (section, row, seat)\n' +
+  '• *52 YY 14*  (section, row, seat)\n' +
   '• *Section 112 Row F Seat 14*\n' +
   '• *Check TM-847294-X*  (ticket code)\n\n' +
   'You get their status, cool-off time left, description and every gate they have tried.\n' +

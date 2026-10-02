@@ -354,7 +354,7 @@ export class LinkedWhatsApp {
   async sendTest(jid: string): Promise<void> {
     if (!this.sock || this.status !== 'connected') throw new Error('Link the phone first');
     await this.sock.sendMessage(jid, {
-      text: '✅ *Gatekeeper is connected to this group.*\nSend a seat to check it, e.g. *BB 212 100*, or type *Help*.',
+      text: '✅ *Gatekeeper is connected to this group.*\nSend a seat to check it, e.g. *52 YY 14*, or type *Help*.',
     });
   }
 

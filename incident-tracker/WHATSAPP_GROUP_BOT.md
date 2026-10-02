@@ -4,10 +4,10 @@ Stewards log and check refused patrons entirely inside your **work WhatsApp grou
 
 | A steward sends | Gatekeeper replies |
 |---|---|
-| a photo of the customer's Ticketmaster QR, or of the customer, captioned `REFUSED BB 212 100 West green hat, very drunk` | ✅ Logged 🔴 REFUSED · BB 212 100 · West Hub 18:45 |
-| `30 BB 212 100 West swaying` | ✅ Logged 🟠 SENT AWAY 30 MIN · BB 212 100 · back after 19:15 |
-| `BB 212 100` | 🔴 REFUSED … with the description, who logged it, where and when, plus the photo |
-| `BB 212 100` (nothing logged) | ✅ NOT REFUSED |
+| a photo of the customer's Ticketmaster QR, or of the customer, captioned `REFUSED 52 YY 14 West green hat, very drunk` | ✅ Logged 🔴 REFUSED · 52 YY 14 · West Hub 18:45 |
+| `30 52 YY 14 West swaying` | ✅ Logged 🟠 SENT AWAY 30 MIN · 52 YY 14 · back after 19:15 |
+| `52 YY 14` | 🔴 REFUSED … with the description, who logged it, where and when, plus the photo |
+| `52 YY 14` (nothing logged) | ✅ NOT REFUSED |
 | a log for a seat already flagged at another hub | 🚨 ALREADY REFUSED … second attempt, ⛔ do not admit |
 
 If a log is missing the decision, seat, hub or reason, the bot asks for it. The time is added automatically. Each steward's hub is remembered for the night. `UNDO` removes your last record, `CANCEL` stops a half-finished log, and `HELP` shows the commands.
@@ -95,8 +95,8 @@ The link is stored in the database, so it survives restarts and redeploys. You o
 ## 5. Try it in the group
 
 1. `HELP` shows the commands.
-2. `30 BB 212 100 West testing`: you should get ✅ Logged 🟠 SENT AWAY.
-3. `BB 212 100`: you should get 🟠 SENT AWAY with minutes left.
+2. `30 52 YY 14 West testing`: you should get ✅ Logged 🟠 SENT AWAY.
+3. `52 YY 14`: you should get 🟠 SENT AWAY with minutes left.
 4. `UNDO` removes the test record.
 
 Then show your colleagues the table at the top of this page.

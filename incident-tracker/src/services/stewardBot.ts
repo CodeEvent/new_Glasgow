@@ -37,7 +37,7 @@ export interface OutboundReply {
 
 // ---------------------------------------------------------------- parsing
 
-const DECISION_RE = /^\s*(refused|refuse|ref|r|sent\s*away|sent|sa|30|30\s*min(?:s|utes)?|cool\s*-?\s*off|cooling\s*off|cooloff|cool)\b[\s:,-]*/i;
+const DECISION_RE = /^\s*(refused|refuse|ref|r|sent\s*away|sent|sa|30\s*min(?:ute)?s?|30|cool\s*-?\s*off|cooling\s*off|cooloff|cool)\b[\s:,-]*/i;
 const HUB_RE = /^\s*(east|west|south|hosp(?:itality)?)(?:\s*hub)?\b[\s:,]*/i;
 const SEAT_RE =
   /^\s*(?:(?:section|sect|sec|block|blk)\.?\s*)?([a-z0-9]{1,6})\s*[\s/,|]\s*(?:(?:row|rw)\.?\s*)?([a-z0-9]{1,4})\s*[\s/,|]\s*(?:(?:seat|st)\.?\s*)?(\d{1,4})\b[\s:,]*/i;
@@ -125,7 +125,7 @@ const UNDO_WINDOW_MS = 15 * 60_000;
 
 const PROMPTS: Record<Field, string> = {
   decision: 'Refused or sent away for 30 minutes? Reply *REFUSED* or *30*.',
-  seat: 'Which seat? Send section, row and seat, e.g. *BB 212 100*.',
+  seat: 'Which seat? Send section, row and seat, e.g. *52 YY 14*.',
   hub: 'Which hub are you at? *East*, *West*, *South* or *Hospitality*.',
   reason: 'Reason? e.g. *green hat, very drunk*. Reply *-* to skip.',
 };
@@ -361,10 +361,10 @@ function confirmation(o: ScanOutcome, hub: Hub, p: Pending, hubWasRemembered: bo
 
 export const STEWARD_HELP =
   '🤖 *GATEKEEPER*\n\n' +
-  '*Check a seat:* send it, e.g. *BB 212 100*\n\n' +
+  '*Check a seat:* send section, row, seat, e.g. *52 YY 14*\n\n' +
   '*Log someone:* send a photo of their ticket QR or of them, with:\n' +
-  '• *REFUSED BB 212 100 West green hat, very drunk*\n' +
-  '• *30 BB 212 100 West* (sent away for 30 minutes)\n' +
+  '• *REFUSED 52 YY 14 West green hat, very drunk*\n' +
+  '• *30 52 YY 14 West* (sent away for 30 minutes)\n' +
   'Missing details? I’ll ask. Your hub is remembered.\n\n' +
   '*UNDO*: remove your last record · *CANCEL*: stop a log\n' +
   '_Records are deleted automatically after 24 hours._';
