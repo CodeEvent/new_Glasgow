@@ -1,0 +1,2 @@
+# Local Claude Code settings (may contain API keys, e.g. OpenRouter)
+.claude/settings.local.json
