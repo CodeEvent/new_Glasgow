@@ -13,12 +13,25 @@ export interface OutboundTextPayload {
   text: { preview_url: false; body: string };
 }
 
+export interface OutboundTemplatePayload {
+  messaging_product: 'whatsapp';
+  to: string;
+  type: 'template';
+  template: {
+    name: string;
+    language: { code: string };
+    components: Array<{ type: 'body'; parameters: Array<{ type: 'text'; text: string }> }>;
+  };
+}
+
 export interface SendResult {
   ok: boolean;
   mocked: boolean;
   messageId?: string;
   attempts: number;
   error?: string;
+  /** True when Meta refused free-form text and the approved template was sent instead. */
+  viaTemplate?: boolean;
 }
 
 /** WhatsApp caps text bodies at 4096 characters. */
@@ -44,15 +57,51 @@ export function graphMessagesUrl(): string {
   return `${cfg.WHATSAPP_GRAPH_BASE_URL.replace(/\/+$/, '')}/${cfg.WHATSAPP_API_VERSION}/${cfg.WHATSAPP_PHONE_NUMBER_ID}/messages`;
 }
 
-export function buildTextPayload(body: string, to = getConfig().WHATSAPP_GROUP_ID): OutboundTextPayload {
+/** Everyone an alert goes to: the group (if configured) plus each supervisor number. */
+export function alertRecipients(): string[] {
+  const cfg = getConfig();
+  return [...(cfg.WHATSAPP_GROUP_ID ? [cfg.WHATSAPP_GROUP_ID] : []), ...cfg.WHATSAPP_SUPERVISOR_NUMBERS];
+}
+
+export function buildTextPayload(body: string, to = alertRecipients()[0]): OutboundTextPayload {
   const cfg = getConfig();
   const trimmed = body.length > MAX_BODY ? `${body.slice(0, MAX_BODY - 20)}\n…(truncated)` : body;
+  const isGroup = cfg.WHATSAPP_GROUP_ID !== undefined && to === cfg.WHATSAPP_GROUP_ID;
   return {
     messaging_product: 'whatsapp',
-    ...(cfg.WHATSAPP_RECIPIENT_TYPE ? { recipient_type: cfg.WHATSAPP_RECIPIENT_TYPE } : {}),
+    ...(isGroup && cfg.WHATSAPP_RECIPIENT_TYPE ? { recipient_type: cfg.WHATSAPP_RECIPIENT_TYPE } : {}),
     to,
     type: 'text',
     text: { preview_url: false, body: trimmed },
+  };
+}
+
+/**
+ * Template messages may not contain newlines, tabs or formatting runs, and a
+ * parameter is capped at 1024 characters, so the alert is flattened to one line.
+ */
+export function flattenForTemplate(body: string): string {
+  const flat = body
+    .replace(/[*_~`]/g, '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .join(' · ')
+    .replace(/\s{2,}/g, ' ');
+  return flat.length > 1000 ? `${flat.slice(0, 999)}…` : flat;
+}
+
+export function buildTemplatePayload(body: string, to: string): OutboundTemplatePayload {
+  const cfg = getConfig();
+  return {
+    messaging_product: 'whatsapp',
+    to,
+    type: 'template',
+    template: {
+      name: cfg.WHATSAPP_ALERT_TEMPLATE ?? '',
+      language: { code: cfg.WHATSAPP_TEMPLATE_LANG },
+      components: [{ type: 'body', parameters: [{ type: 'text', text: flattenForTemplate(body) }] }],
+    },
   };
 }
 
@@ -64,8 +113,14 @@ function isRetryable(err: unknown): boolean {
   return s === 429 || s >= 500;
 }
 
+type MetaErrorBody = { error?: { message?: string; code?: number } };
+
+function metaErrorCode(err: unknown): number | undefined {
+  return (err as AxiosError<MetaErrorBody>).response?.data?.error?.code;
+}
+
 function describeError(err: unknown): string {
-  const ax = err as AxiosError<{ error?: { message?: string; code?: number } }>;
+  const ax = err as AxiosError<MetaErrorBody>;
   if (ax.isAxiosError) {
     const metaErr = ax.response?.data?.error;
     return ax.response
@@ -75,11 +130,25 @@ function describeError(err: unknown): string {
   return (err as Error)?.message ?? String(err);
 }
 
+/** Meta 131047: free-form text refused because the recipient has not messaged the business in 24 hours. */
+const META_REENGAGEMENT_REQUIRED = 131047;
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+async function postToGraph(payload: OutboundTextPayload | OutboundTemplatePayload) {
+  return axios.post<{ messages?: Array<{ id: string }> }>(graphMessagesUrl(), payload, {
+    headers: {
+      Authorization: `Bearer ${getConfig().WHATSAPP_ACCESS_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    timeout: 8_000,
+  });
+}
+
 /**
- * Sends a text message to the supervisors' group via the Meta Cloud API, with
- * exponential backoff on 429/5xx/network failures. Never throws.
+ * Sends one text message via the Meta Cloud API, with exponential backoff on
+ * 429/5xx/network failures and a template fallback outside the 24-hour window.
+ * Defaults to the first alert recipient. Never throws.
  */
 export async function sendGroupMessage(
   body: string,
@@ -111,17 +180,30 @@ export async function sendGroupMessage(
   let lastError = '';
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      const res = await axios.post<{ messages?: Array<{ id: string }> }>(graphMessagesUrl(), payload, {
-        headers: {
-          Authorization: `Bearer ${cfg.WHATSAPP_ACCESS_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: 8_000,
-      });
+      const res = await postToGraph(payload);
       return { ok: true, mocked: false, attempts: attempt, messageId: res.data?.messages?.[0]?.id };
     } catch (err) {
       lastError = describeError(err);
-      console.error(`[whatsapp] send attempt ${attempt}/${MAX_ATTEMPTS} failed: ${lastError}`);
+      console.error(`[whatsapp] send to ${payload.to} attempt ${attempt}/${MAX_ATTEMPTS} failed: ${lastError}`);
+
+      if (metaErrorCode(err) === META_REENGAGEMENT_REQUIRED) {
+        if (!cfg.WHATSAPP_ALERT_TEMPLATE) {
+          console.error(
+            `[whatsapp] ${payload.to} has not messaged the bot in 24h, so Meta only allows template messages. ` +
+              'Ask them to text "Help" to the bot, or set WHATSAPP_ALERT_TEMPLATE to an approved template.',
+          );
+          break;
+        }
+        try {
+          const res = await postToGraph(buildTemplatePayload(body, payload.to));
+          return { ok: true, mocked: false, attempts: attempt, viaTemplate: true, messageId: res.data?.messages?.[0]?.id };
+        } catch (tplErr) {
+          lastError = `template fallback failed: ${describeError(tplErr)}`;
+          console.error(`[whatsapp] ${lastError}`);
+          break;
+        }
+      }
+
       if (!isRetryable(err) || attempt === MAX_ATTEMPTS) break;
       // Critical alerts retry faster.
       const base = priority === 'critical' ? 250 : 500;
@@ -141,9 +223,21 @@ export async function sendGroupMessage(
   return { ok: false, mocked: false, attempts: MAX_ATTEMPTS, error: lastError };
 }
 
+/** Sends an alert to every recipient in parallel. Never rejects. */
+export async function broadcastAlert(body: string, priority: MessagePriority = 'standard'): Promise<SendResult> {
+  const results = await Promise.all(alertRecipients().map((to) => sendGroupMessage(body, priority, to)));
+  const failed = results.filter((r) => !r.ok);
+  return {
+    ok: failed.length === 0,
+    mocked: results.every((r) => r.mocked),
+    attempts: Math.max(0, ...results.map((r) => r.attempts)),
+    error: failed.length ? failed.map((r) => r.error).join('; ') : undefined,
+  };
+}
+
 /** Fire-and-forget wrapper for request handlers: never blocks the response, never rejects. */
 export function dispatchAlert(body: string, priority: MessagePriority = 'standard'): Promise<SendResult> {
-  return sendGroupMessage(body, priority).catch((err) => {
+  return broadcastAlert(body, priority).catch((err) => {
     console.error('[whatsapp] unexpected dispatch failure:', err);
     return { ok: false, mocked: false, attempts: 0, error: String(err) };
   });

@@ -4,9 +4,9 @@ export const REQUIRED_ENV_VARS = [
   'DATABASE_URL',
   'WHATSAPP_ACCESS_TOKEN',
   'WHATSAPP_PHONE_NUMBER_ID',
-  'WHATSAPP_GROUP_ID',
   'WHATSAPP_VERIFY_TOKEN',
 ] as const;
+// Plus at least one destination for alerts: WHATSAPP_GROUP_ID and/or WHATSAPP_SUPERVISOR_NUMBERS.
 
 const boolFlag = z
   .string()
@@ -15,12 +15,30 @@ const boolFlag = z
 
 const nonBlank = z.string().trim().min(1);
 
-const envSchema = z.object({
+const blankToUndefined = (v: unknown) => (typeof v === 'string' && v.trim() === '' ? undefined : v);
+
+/** "+44 7700 900123, 447700900456" -> ["447700900123", "447700900456"] (Meta's wa_id format). */
+const phoneList = z
+  .string()
+  .optional()
+  .transform((v) =>
+    (v ?? '')
+      .split(/[,;\n]+/)
+      .map((n) => n.replace(/\D/g, ''))
+      .filter((n) => n.length >= 7),
+  );
+
+const envObject = z.object({
   DATABASE_URL: nonBlank,
   WHATSAPP_ACCESS_TOKEN: nonBlank,
   WHATSAPP_PHONE_NUMBER_ID: nonBlank,
-  WHATSAPP_GROUP_ID: nonBlank,
   WHATSAPP_VERIFY_TOKEN: nonBlank,
+  // Alert destinations: a WhatsApp group (Cloud API Groups) and/or individual supervisor numbers.
+  WHATSAPP_GROUP_ID: z.preprocess(blankToUndefined, z.string().trim().optional()),
+  WHATSAPP_SUPERVISOR_NUMBERS: phoneList,
+  // Approved template used when Meta refuses free-form text (recipient silent for 24h+). Body must have one {{1}}.
+  WHATSAPP_ALERT_TEMPLATE: z.preprocess(blankToUndefined, z.string().trim().optional()),
+  WHATSAPP_TEMPLATE_LANG: z.string().trim().default('en_GB'),
 
   // Optional tuning / hardening.
   PORT: z.coerce.number().int().positive().default(3000),
@@ -40,6 +58,16 @@ const envSchema = z.object({
   DB_POOL_MAX: z.coerce.number().int().positive().default(10),
   OFFLINE_SYNC_INTERVAL_MS: z.coerce.number().int().min(500).default(15_000),
   TZ_DISPLAY: z.string().trim().default('Europe/London'),
+});
+
+const envSchema = envObject.superRefine((v, ctx) => {
+  if (!v.WHATSAPP_GROUP_ID && v.WHATSAPP_SUPERVISOR_NUMBERS.length === 0) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['WHATSAPP_GROUP_ID'],
+      message: 'set WHATSAPP_GROUP_ID and/or WHATSAPP_SUPERVISOR_NUMBERS so alerts have somewhere to go',
+    });
+  }
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

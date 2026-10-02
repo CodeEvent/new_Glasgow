@@ -1,4 +1,5 @@
 import type { ScanInput, ScanOutcome } from './scanService';
+import { seatLabel } from '../domain';
 import type { MessagePriority } from './whatsapp';
 import {
   agoLabel,
@@ -39,6 +40,10 @@ export function buildScanAlert(input: ScanInput, outcome: ScanOutcome, replayed 
   const originSteward = originEvent ? sanitize(originEvent.steward_name, 100) : 'unknown';
   const minsSinceOrigin = originEvent ? minutesBetween(originEvent.timestamp, evaluatedAt) : 0;
   const originKind = outcome.previousStatus === 'cooling_off' ? 'cool-off' : 'refusal';
+  const seat = seatLabel(ticket.section, ticket.row_label, ticket.seat_number);
+  const seatLine = seat ? `\n💺 *Seat:* ${seat}` : '';
+  const seatMatch =
+    outcome.matchedBy === 'seat' ? `\n🔁 *Matched by seat* — a different ticket code was presented (rotating SafeTix code or a swapped ticket).` : '';
 
   switch (outcome.scenario) {
     case 'NEW_INCIDENT': {
@@ -55,13 +60,18 @@ export function buildScanAlert(input: ScanInput, outcome: ScanOutcome, replayed 
         body:
           `${prefix}${header}\n\n` +
           `🎟️ *Ticket ID:* ${id}` +
+          seatLine +
           timing +
           `\n👥 *Party Size:* ${partyLabel(ticket.party_size)}` +
           `\n👤 *Description:* ${desc}` +
           `\n📝 *Reasoning:* ${reasoning}` +
           `\n🧑‍✈️ *Logged by:* ${steward} at ${formatClock(evaluatedAt)}` +
           locationLine(input) +
-          `\n\n_All hubs: watch for this ticket. Reply "Check ${id}" for full history._`,
+          `\n\n_All hubs: watch for this ticket. Reply "Check ${
+            ticket.section && ticket.row_label && ticket.seat_number
+              ? `${sanitize(ticket.section, 16)} ${sanitize(ticket.row_label, 8)} ${sanitize(ticket.seat_number, 8)}`
+              : id
+          }" for full history._`,
       };
     }
 
@@ -76,6 +86,8 @@ export function buildScanAlert(input: ScanInput, outcome: ScanOutcome, replayed 
           `${prefix}🚨 *CRITICAL RE-SCAN DETECTED:* Ticket ${id} is attempting a gate-bypass at *${input.hub_location}*! ` +
           `Original ${originKind} logged at *${originHub}* ${agoLabel(minsSinceOrigin)} (${desc}).\n\n` +
           `📊 *Status:* ${statusLabel(ticket.current_status)}` +
+          seatLine +
+          seatMatch +
           remaining +
           `\n👥 *Party Size:* ${partyLabel(ticket.party_size)}` +
           `\n🧑‍✈️ *Intercepted by:* ${steward} at ${formatClock(evaluatedAt)}` +
@@ -94,6 +106,8 @@ export function buildScanAlert(input: ScanInput, outcome: ScanOutcome, replayed 
           `Ticket *${id}* was ADMITTED at *${input.hub_location}*${crossHub} by steward *${steward}* ` +
           `despite being flagged ${statusLabel(outcome.previousStatus ?? 'completely_refused')}.\n\n` +
           `🚪 *Breach entry point:* ${input.hub_location}` +
+          seatLine +
+          seatMatch +
           `\n🧑‍✈️ *Authorised by:* ${steward} at ${formatClock(evaluatedAt)}` +
           `\n📌 *Original ${originKind}:* ${originHub} by ${originSteward}, ${agoLabel(minsSinceOrigin)}` +
           `\n👥 *Party Size:* ${partyLabel(ticket.party_size)}` +
@@ -145,6 +159,9 @@ export function buildOfflineAlert(input: ScanInput): AlertMessage {
       `⚠️ *DATABASE OFFLINE — INCIDENT BUFFERED LOCALLY* ⚠️\n\n` +
       `🎟️ *Ticket ID:* ${sanitize(input.ticket_id, 64)}\n` +
       `🚪 *Hub:* ${input.hub_location}\n` +
+      (seatLabel(input.section ?? null, input.row ?? null, input.seat ?? null)
+        ? `💺 *Seat:* ${seatLabel(input.section ?? null, input.row ?? null, input.seat ?? null)}\n`
+        : '') +
       `📋 *Action:* ${action}\n` +
       `🧑‍✈️ *Steward:* ${sanitize(input.steward_name, 100)}\n` +
       (input.description ? `👤 *Description:* ${sanitize(input.description)}\n` : '') +

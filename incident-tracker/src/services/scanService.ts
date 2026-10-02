@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { PoolClient } from 'pg';
 import { getConfig } from '../config/env';
 import { withTransaction } from '../db/pool';
-import { HUBS, type Hub, type IntakeAction, type LoggedAction, type ScanEventRow, type TicketRow } from '../domain';
+import { HUBS, normalizeSeatPart, seatKey, type Hub, type IntakeAction, type LoggedAction, type ScanEventRow, type TicketRow } from '../domain';
 
 // ---------------------------------------------------------------------------
 // Input contract
@@ -29,12 +29,21 @@ const optionalCoord = (min: number, max: number) =>
     z.coerce.number().min(min).max(max).optional(),
   );
 
-export const scanInputSchema = z.object({
-  ticket_id: z
-    .string()
-    .trim()
-    .min(1, 'ticket_id is required')
-    .max(64, 'ticket_id must be at most 64 characters'),
+const seatPart = (max: number) =>
+  z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().trim().max(max).regex(/^[A-Za-z0-9 ]+$/, 'letters and numbers only').optional(),
+  );
+
+const scanObject = z.object({
+  /** Text from the ticket QR code. Optional when the full seat is given. */
+  ticket_id: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().trim().max(64, 'ticket_id must be at most 64 characters').optional(),
+  ),
+  section: seatPart(16),
+  row: seatPart(8),
+  seat: seatPart(8),
   hub_location: z.enum(HUBS),
   latitude: optionalCoord(-90, 90),
   longitude: optionalCoord(-180, 180),
@@ -55,7 +64,27 @@ export const scanInputSchema = z.object({
   occurred_at: z.iso.datetime({ offset: true }).optional(),
 });
 
-export type ScanInput = z.infer<typeof scanInputSchema>;
+export const scanInputSchema = scanObject
+  .superRefine((v, ctx) => {
+    const parts = [v.section, v.row, v.seat].filter(Boolean).length;
+    if (parts !== 0 && parts !== 3) {
+      ctx.addIssue({ code: 'custom', path: ['seat'], message: 'Give section, row and seat together' });
+    }
+    if (!v.ticket_id && parts !== 3) {
+      ctx.addIssue({ code: 'custom', path: ['ticket_id'], message: 'Scan the ticket QR code or enter the section, row and seat' });
+    }
+  })
+  .transform((v) => ({
+    ...v,
+    // Seat-only scans get a deterministic ID so every hub logging the same seat lands on one record.
+    ticket_id: v.ticket_id ?? `SEAT-${[v.section!, v.row!, v.seat!].map(normalizeSeatPart).join('-')}`.slice(0, 64),
+  }));
+
+export type ScanInput = z.output<typeof scanInputSchema>;
+
+export function inputSeatKey(input: Pick<ScanInput, 'section' | 'row' | 'seat'>): string | null {
+  return input.section && input.row && input.seat ? seatKey(input.section, input.row, input.seat) : null;
+}
 
 // ---------------------------------------------------------------------------
 // Outcome contract
@@ -85,6 +114,8 @@ export interface ScanOutcome {
   previousStatus: TicketRow['current_status'] | null;
   /** Server time the scan was evaluated at. */
   evaluatedAt: Date;
+  /** How the existing record was found: by the QR/ticket code, or by seat (e.g. a rotated SafeTix code). */
+  matchedBy: 'ticket' | 'seat' | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +162,14 @@ async function lockTicket(client: PoolClient, ticketId: string): Promise<TicketR
   return rows[0] ?? null;
 }
 
+async function lockTicketBySeat(client: PoolClient, key: string): Promise<TicketRow | null> {
+  const { rows } = await client.query<TicketRow>(
+    'SELECT * FROM tickets WHERE seat_key = $1 ORDER BY updated_at DESC LIMIT 1 FOR UPDATE',
+    [key],
+  );
+  return rows[0] ?? null;
+}
+
 /** The event that opened the ticket's current incident: the latest initial_* log. */
 async function originEventFor(client: PoolClient, ticketId: string): Promise<ScanEventRow | null> {
   const { rows } = await client.query<ScanEventRow>(
@@ -157,10 +196,13 @@ async function originEventFor(client: PoolClient, ticketId: string): Promise<Sca
  * Alerts are NOT sent from here; the caller dispatches them after COMMIT so a
  * rolled-back transaction can never produce a WhatsApp message.
  */
-export async function processScan(input: ScanInput): Promise<ScanOutcome> {
+export async function processScan(rawInput: ScanInput): Promise<ScanOutcome> {
   const coolOffMinutes = getConfig().COOL_OFF_MINUTES;
+  const key = inputSeatKey(rawInput);
 
   return withTransaction(async (client) => {
+    let input = rawInput;
+    let matchedBy: ScanOutcome['matchedBy'] = null;
     // One authoritative clock (the DB's), optionally back-dated for queued/offline scans.
     const clock = await client.query<{ at: Date }>(
       `SELECT GREATEST(LEAST(COALESCE($1::timestamptz, NOW()), NOW()), NOW() - INTERVAL '24 hours') AS at`,
@@ -169,6 +211,24 @@ export async function processScan(input: ScanInput): Promise<ScanOutcome> {
     const at = clock.rows[0].at;
 
     let ticket = await lockTicket(client, input.ticket_id);
+    if (ticket) {
+      matchedBy = 'ticket';
+    } else if (key) {
+      // Unknown code but a known seat: the same patron presenting a rotated or different code.
+      ticket = await lockTicketBySeat(client, key);
+      if (ticket) {
+        matchedBy = 'seat';
+        input = { ...input, ticket_id: ticket.ticket_id };
+      }
+    }
+    if (ticket && key && !ticket.seat_key) {
+      // First time we learn this ticket's seat: remember it for later lookups.
+      const upd = await client.query<TicketRow>(
+        'UPDATE tickets SET section = $2, row_label = $3, seat_number = $4 WHERE ticket_id = $1 RETURNING *',
+        [ticket.ticket_id, input.section, input.row, input.seat],
+      );
+      ticket = upd.rows[0];
+    }
 
     // ---------------- SCENARIO A: new incident ----------------
     if (!ticket) {
@@ -183,16 +243,18 @@ export async function processScan(input: ScanInput): Promise<ScanOutcome> {
           originEvent: null,
           previousStatus: null,
           evaluatedAt: at,
+      matchedBy,
         };
       }
 
       const status = input.action_logged === 'cool_off' ? 'cooling_off' : 'completely_refused';
       const inserted = await client.query<TicketRow>(
         `INSERT INTO tickets
-           (ticket_id, current_status, party_size, description, reasoning, cool_down_until, created_at)
+           (ticket_id, current_status, party_size, description, reasoning, cool_down_until, created_at,
+            section, row_label, seat_number)
          VALUES ($1, $2::incident_status, $3, $4, $5,
                  CASE WHEN $2::incident_status = 'cooling_off' THEN $6::timestamptz + make_interval(mins => $7) END,
-                 $6)
+                 $6, $8, $9, $10)
          ON CONFLICT (ticket_id) DO NOTHING
          RETURNING *`,
         [
@@ -203,6 +265,9 @@ export async function processScan(input: ScanInput): Promise<ScanOutcome> {
           buildReasoning(input),
           at,
           coolOffMinutes,
+          input.section ?? null,
+          input.row ?? null,
+          input.seat ?? null,
         ],
       );
 
@@ -222,12 +287,14 @@ export async function processScan(input: ScanInput): Promise<ScanOutcome> {
           originEvent: event,
           previousStatus: null,
           evaluatedAt: at,
+      matchedBy,
         };
       }
 
       // Lost a race with another hub inserting the same ticket: fall through to the existing-ticket rules.
       ticket = await lockTicket(client, input.ticket_id);
       if (!ticket) throw new Error(`Ticket ${input.ticket_id} vanished during concurrent insert`);
+      matchedBy = 'ticket';
     }
 
     const previousStatus = ticket.current_status;
@@ -262,6 +329,7 @@ export async function processScan(input: ScanInput): Promise<ScanOutcome> {
           originEvent,
           previousStatus,
           evaluatedAt: at,
+      matchedBy,
         };
       }
 
@@ -278,6 +346,7 @@ export async function processScan(input: ScanInput): Promise<ScanOutcome> {
           originEvent,
           previousStatus,
           evaluatedAt: at,
+      matchedBy,
         };
       }
 
@@ -303,6 +372,7 @@ export async function processScan(input: ScanInput): Promise<ScanOutcome> {
         originEvent,
         previousStatus,
         evaluatedAt: at,
+      matchedBy,
       };
     }
 
@@ -318,6 +388,7 @@ export async function processScan(input: ScanInput): Promise<ScanOutcome> {
         originEvent,
         previousStatus,
         evaluatedAt: at,
+      matchedBy,
       };
     }
 
@@ -357,6 +428,7 @@ export async function processScan(input: ScanInput): Promise<ScanOutcome> {
       originEvent: event,
       previousStatus,
       evaluatedAt: at,
+      matchedBy,
     };
   });
 }

@@ -4,7 +4,7 @@
   "description": "Gatekeeper Proactive Entry Sync Engine: hub-hopping detection + two-way WhatsApp sync for stadium screening hubs",
   "main": "dist/server.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "dev": "tsx watch src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -16,13 +16,16 @@
     "demo": "tsx src/demo/server.ts",
     "demo:smoke": "tsx src/demo/smoke.ts",
     "demo:web": "node demo/build-web.mjs",
-    "demo:web:serve": "node demo/serve-web.mjs"
+    "demo:web:serve": "node demo/serve-web.mjs",
+    "start:prod": "node dist/db/migrate.js up && node dist/server.js",
+    "migrate:prod": "node dist/db/migrate.js up"
   },
   "license": "UNLICENSED",
   "dependencies": {
     "axios": "^1.20.0",
     "dotenv": "^18.0.5",
     "express": "^5.2.1",
+    "jsqr": "^1.4.0",
     "pg": "^8.23.1",
     "zod": "^4.6.5"
   },

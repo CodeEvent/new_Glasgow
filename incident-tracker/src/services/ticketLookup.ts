@@ -1,5 +1,5 @@
 import { getPool } from '../db/pool';
-import type { Hub, IncidentStatus, LoggedAction } from '../domain';
+import { seatKey, seatLabel, type Hub, type IncidentStatus, type LoggedAction } from '../domain';
 import { actionLabel, agoLabel, formatClock, minutesBetween, partyLabel, sanitize, statusLabel } from './format';
 
 export interface TicketProfileEvent {
@@ -18,6 +18,9 @@ export interface TicketProfile {
   reasoning: string;
   cool_down_until: Date | null;
   created_at: Date;
+  section: string | null;
+  row_label: string | null;
+  seat_number: string | null;
   mins_left: number | null;
   db_now: Date;
   events: TicketProfileEvent[];
@@ -25,7 +28,7 @@ export interface TicketProfile {
 
 const PROFILE_SQL = `
   SELECT t.ticket_id, t.current_status, t.party_size, t.description, t.reasoning,
-         t.cool_down_until, t.created_at, NOW() AS db_now,
+         t.cool_down_until, t.created_at, t.section, t.row_label, t.seat_number, NOW() AS db_now,
          CASE WHEN t.current_status = 'cooling_off' AND t.cool_down_until IS NOT NULL
               THEN GREATEST(0, CEIL(EXTRACT(EPOCH FROM (t.cool_down_until - NOW())) / 60))::int
          END AS mins_left,
@@ -67,6 +70,15 @@ export async function getTicketProfile(ticketId: string): Promise<TicketProfile 
   };
 }
 
+/** Most recent ticket recorded against a seat (section / row / seat, case and spacing ignored). */
+export async function getTicketProfileBySeat(section: string, row: string, seat: string): Promise<TicketProfile | null> {
+  const { rows } = await getPool().query<{ ticket_id: string }>(
+    'SELECT ticket_id FROM tickets WHERE seat_key = $1 ORDER BY updated_at DESC LIMIT 1',
+    [seatKey(section, row, seat)],
+  );
+  return rows[0] ? getTicketProfile(rows[0].ticket_id) : null;
+}
+
 const MAX_HISTORY_LINES = 15;
 
 export function formatTicketProfile(p: TicketProfile): string {
@@ -80,6 +92,7 @@ export function formatTicketProfile(p: TicketProfile): string {
   let msg =
     `🤖 *TICKET PROFILE RETRIEVED* 🤖\n\n` +
     `🎟️ *Ticket ID:* ${sanitize(p.ticket_id, 64)}\n` +
+    (seatLabel(p.section, p.row_label, p.seat_number) ? `💺 *Seat:* ${seatLabel(p.section, p.row_label, p.seat_number)}\n` : '') +
     `📊 *Current Status:* ${statusLabel(p.current_status)}\n` +
     `⏳ *Remaining Time:* ${remaining}\n` +
     `⏱️ *First Logged:* ${formatClock(p.created_at)} (${agoLabel(minutesBetween(p.created_at, p.db_now))}) at ${firstHub}\n` +
@@ -102,4 +115,8 @@ export function formatTicketProfile(p: TicketProfile): string {
 
 export function formatNotFound(queryId: string): string {
   return `❌ *No Database Record Extracted for Ticket ID:* ${sanitize(queryId, 64)}`;
+}
+
+export function formatSeatNotFound(section: string, row: string, seat: string): string {
+  return `❌ *No Database Record Extracted for Seat:* Section ${sanitize(section, 16)} · Row ${sanitize(row, 8)} · Seat ${sanitize(seat, 8)}`;
 }

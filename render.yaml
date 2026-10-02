@@ -1,0 +1,36 @@
+# Render Blueprint (repo root). New -> Blueprint -> pick this repo. Builds incident-tracker/Dockerfile. Secrets go in the dashboard (sync: false).
+services:
+  - type: web
+    name: gatekeeper
+    runtime: docker
+    rootDir: incident-tracker
+    dockerContext: .
+    dockerfilePath: ./Dockerfile
+    plan: starter            # free plans sleep after 15 min idle, which delays WhatsApp replies
+    region: frankfurt
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL     # Supabase -> Connect -> Session pooler URI
+        sync: false
+      - key: DATABASE_SSL
+        value: "true"
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        generateValue: true
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: WHATSAPP_SUPERVISOR_NUMBERS
+        sync: false
+      - key: WHATSAPP_GROUP_ID
+        sync: false
+      - key: WHATSAPP_ALERT_TEMPLATE
+        sync: false
+      - key: STEWARD_API_KEY
+        generateValue: true
+      - key: MOCK_WHATSAPP_API
+        value: "false"
+      - key: TZ_DISPLAY
+        value: Europe/London

@@ -88,8 +88,16 @@
         <button type="button" id="scanBtn">📷 Scan QR</button>
       </div>
       <video id="video" playsinline muted></video>
-      <label for="ticket">Ticket ID</label>
-      <input id="ticket" required maxlength="64" autocapitalize="characters" autocomplete="off" placeholder="TM-847294-X">
+      <canvas id="qrCanvas" hidden></canvas>
+      <label for="ticket">Ticket code (filled in by the scan)</label>
+      <input id="ticket" maxlength="64" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="TM-847294-X">
+      <div class="row" style="margin-top:4px">
+        <div><label for="section">Section / Block</label><input id="section" maxlength="16" autocapitalize="characters" autocomplete="off" placeholder="112"></div>
+        <div><label for="rowNo">Row</label><input id="rowNo" maxlength="8" autocapitalize="characters" autocomplete="off" placeholder="F"></div>
+        <div><label for="seatNo">Seat</label><input id="seatNo" maxlength="8" autocapitalize="characters" autocomplete="off" inputmode="numeric" placeholder="14"></div>
+      </div>
+      <p class="muted" style="margin:6px 0 0">Always add the seat from the ticket screen. Ticketmaster SafeTix codes change every few seconds, so the seat is how other gates recognise the same person. You can log by seat alone if the code won't scan.</p>
+      <div id="scanNote" class="banner note"></div>
       <div id="precheck" class="banner"></div>
     </section>
 
@@ -193,18 +201,27 @@
     b.textContent = text;
   }
 
-  async function precheck(id) {
-    if (!id) { $('precheck').className = 'banner'; return; }
+  function seatParts() {
+    const section = $('section').value.trim(), row = $('rowNo').value.trim(), seat = $('seatNo').value.trim();
+    return section && row && seat ? { section, row, seat } : null;
+  }
+
+  async function precheck() {
+    const id = $('ticket').value.trim();
+    const seat = seatParts();
+    if (!id && !seat) { $('precheck').className = 'banner'; return; }
     try {
-      const res = await fetch(`/api/tickets/${encodeURIComponent(id)}`, { headers: headers() });
+      const qs = new URLSearchParams({ ...(id ? { ticket_id: id } : {}), ...(seat || {}) });
+      const res = await fetch(`/api/tickets/lookup?${qs}`, { headers: headers() });
       const data = await res.json();
       if (!res.ok) { banner('note', data.offline ? '⚠️ Database offline — cannot check history. Treat with caution.' : 'Could not check ticket.'); return; }
-      if (!data.found) { banner('ok', '✅ No incident on record for this ticket.'); return; }
+      if (!data.found) { banner('ok', '✅ No incident on record for this ticket or seat.'); return; }
       if (data.flagged) {
         const otherHub = data.origin_hub && data.origin_hub !== setup.hub;
         const left = data.mins_left ? ` · ${data.mins_left} mins of cool-off left` : '';
-        banner('warn', `⛔ ${data.status_label} at ${data.origin_hub}${left}. ${data.ticket.description}` +
-          (otherHub ? ' — POSSIBLE HUB HOPPER. Submit to alert supervisors.' : ''));
+        const via = data.matched_by === 'seat' ? ' (matched by seat)' : '';
+        banner('warn', `⛔ ${data.status_label} at ${data.origin_hub}${left}${via}. ${data.ticket.description}` +
+          (otherHub ? ' · POSSIBLE HUB HOPPER. Submit to alert supervisors.' : ''));
       } else {
         banner('note', `Previously admitted. ${data.ticket.events.length} scan(s) on record.`);
       }
@@ -214,10 +231,12 @@
   }
 
   let precheckTimer;
-  $('ticket').addEventListener('input', () => {
-    clearTimeout(precheckTimer);
-    precheckTimer = setTimeout(() => precheck($('ticket').value.trim()), 400);
-  });
+  for (const id of ['ticket', 'section', 'rowNo', 'seatNo']) {
+    $(id).addEventListener('input', () => {
+      clearTimeout(precheckTimer);
+      precheckTimer = setTimeout(precheck, 400);
+    });
+  }
 
   function showOverlay(screen) {
     const ov = $('overlay');
@@ -266,7 +285,8 @@
     e.preventDefault();
     const action = document.querySelector('input[name=action]:checked');
     const payload = {
-      ticket_id: $('ticket').value.trim(),
+      ticket_id: $('ticket').value.trim() || undefined,
+      ...(seatParts() || {}),
       hub_location: setup.hub,
       steward_name: setup.steward,
       action_logged: action && action.value,
@@ -299,9 +319,12 @@
     $('form').reset();
     $('party').value = 1;
     $('precheck').className = 'banner';
+    $('scanNote').className = 'banner note';
   }
 
   // ---------- QR scanning ----------
+  // Native BarcodeDetector where available (Android Chrome: QR, PDF417, Aztec...);
+  // otherwise jsQR on camera frames (iPhone Safari, Firefox). Camera needs HTTPS.
   let stream = null;
   async function stopScan() {
     if (stream) stream.getTracks().forEach((t) => t.stop());
@@ -309,42 +332,106 @@
     $('video').style.display = 'none';
     $('scanBtn').textContent = '📷 Scan QR';
   }
+
+  let jsQRLoad = null;
+  function loadJsQR() {
+    if (window.jsQR) return Promise.resolve(window.jsQR);
+    jsQRLoad = jsQRLoad || new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = '/vendor/jsQR.js';
+      s.onload = () => resolve(window.jsQR);
+      s.onerror = () => reject(new Error('QR decoder failed to load'));
+      document.head.append(s);
+    });
+    return jsQRLoad;
+  }
+
+  async function makeDecoder(video) {
+    if ('BarcodeDetector' in window) {
+      const wanted = ['qr_code', 'pdf417', 'aztec', 'data_matrix', 'code_128'];
+      const supported = await BarcodeDetector.getSupportedFormats().catch(() => []);
+      const formats = wanted.filter((f) => supported.includes(f));
+      if (formats.length) {
+        const detector = new BarcodeDetector({ formats });
+        return async () => { const c = await detector.detect(video); return c.length ? c[0].rawValue : null; };
+      }
+    }
+    const jsQR = await loadJsQR();
+    const canvas = $('qrCanvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    return async () => {
+      const w = video.videoWidth, h = video.videoHeight;
+      if (!w || !h) return null;
+      const scale = Math.min(1, 720 / Math.max(w, h)); // decode a downscaled frame for speed
+      canvas.width = Math.round(w * scale); canvas.height = Math.round(h * scale);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'attemptBoth' });
+      return code ? code.data : null;
+    };
+  }
+
+  /** Codes longer than the 64-character ticket column are stored as a stable SHA-256 fingerprint. */
+  async function ticketCodeFrom(raw) {
+    const value = raw.trim();
+    if (value.length <= 64) return value;
+    if (!crypto.subtle) return value.slice(0, 64);
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+    return 'QR-' + [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+  }
+
   $('scanBtn').onclick = async () => {
     if (stream) return stopScan();
-    if (!('BarcodeDetector' in window)) { alert('QR scanning is not supported in this browser. Type the ticket ID instead.'); $('ticket').focus(); return; }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert('This browser cannot open the camera. Use Chrome or Safari over https, or type the seat details.');
+      return;
+    }
     try {
-      const detector = new BarcodeDetector({ formats: ['qr_code'] });
       stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
       const video = $('video');
       video.srcObject = stream;
       video.style.display = 'block';
       await video.play();
       $('scanBtn').textContent = '✖ Stop scanning';
+      const decode = await makeDecoder(video);
+      let busy = false;
       const loop = async () => {
         if (!stream) return;
-        try {
-          const codes = await detector.detect(video);
-          if (codes.length) {
-            const value = codes[0].rawValue.trim().slice(0, 64);
-            $('ticket').value = value;
-            stopScan();
-            precheck(value);
-            return;
-          }
-        } catch {}
+        if (!busy) {
+          busy = true;
+          try {
+            const raw = await decode();
+            if (raw) {
+              $('ticket').value = await ticketCodeFrom(raw);
+              stopScan();
+              if (navigator.vibrate) navigator.vibrate(80);
+              const note = $('scanNote');
+              note.className = 'banner show note';
+              note.textContent = raw.length > 64
+                ? 'Code scanned (long code stored as a fingerprint). Now add the section, row and seat.'
+                : 'Code scanned. Now add the section, row and seat from the ticket screen.';
+              precheck();
+              $('section').focus();
+              return;
+            }
+          } catch {}
+          busy = false;
+        }
         requestAnimationFrame(loop);
       };
       loop();
-    } catch {
+    } catch (err) {
       stopScan();
-      alert('Camera unavailable. Type the ticket ID instead.');
+      alert(err && err.name === 'NotAllowedError'
+        ? 'Camera permission was refused. Allow camera access for this site in your browser settings.'
+        : 'Camera unavailable. Type the seat details instead.');
     }
   };
 
   // Support QR codes that encode a link like /?t=TICKET_ID
   const fromUrl = new URLSearchParams(location.search).get('t');
   applySetup();
-  if (fromUrl) { $('ticket').value = fromUrl.slice(0, 64); precheck(fromUrl); }
+  if (fromUrl) { $('ticket').value = fromUrl.slice(0, 64); precheck(); }
 })();
 </script>
 </body>

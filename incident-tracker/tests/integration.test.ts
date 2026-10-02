@@ -38,7 +38,17 @@ describe('POST /api/scan validation', () => {
     const res = await scan({ ticket_id: '', hub_location: 'North Hub', steward_name: 'x', action_logged: 'party' });
     expect(res.status).toBe(400);
     const fields = res.body.details.map((d: { field: string }) => d.field);
-    expect(fields).toEqual(expect.arrayContaining(['ticket_id', 'hub_location', 'action_logged']));
+    expect(fields).toEqual(expect.arrayContaining(['hub_location', 'action_logged']));
+  });
+
+  it('needs a ticket code or a complete seat', async () => {
+    const valid = { hub_location: 'West Hub', steward_name: 'Dave', action_logged: 'refused' };
+    const none = await scan(valid);
+    expect(none.status).toBe(400);
+    expect(none.body.details[0]).toMatchObject({ field: 'ticket_id' });
+    const partial = await scan({ ...valid, ticket_id: 'TM-1', section: '112', row: 'F' });
+    expect(partial.status).toBe(400);
+    expect(partial.body.details[0]).toMatchObject({ field: 'seat' });
   });
 });
 
@@ -129,6 +139,65 @@ describe.skipIf(!HAS_DB)('scan state machine (PostgreSQL)', () => {
     expect(scenarios).toEqual(['HUB_HOP_BYPASS', 'NEW_INCIDENT']);
     const { rows } = await getPool().query('SELECT count(*)::int AS n FROM scan_events');
     expect(rows[0].n).toBe(2);
+  });
+
+  it('seat-only scans get a stable ID, and a rotated QR code is matched to the same patron by seat', async () => {
+    const seat = { section: '112', row: 'F', seat: '14' };
+    const first = await scan({ ...baseScan, ticket_id: undefined, ...seat });
+    expect(first.status).toBe(201);
+    expect(first.body.ticket).toMatchObject({ ticket_id: 'SEAT-112-F-14', seat_key: '112|F|14' });
+
+    // SafeTix: the code read at the next gate is different, but the seat is the same.
+    mockOutbox.length = 0;
+    const hop = await scan({ ...baseScan, ticket_id: 'ROTATED-CODE-999', hub_location: 'South Hub', section: '112', row: 'f', seat: ' 14 ' });
+    expect(hop.body.scenario).toBe('HUB_HOP_BYPASS');
+    expect(hop.body.ticket.ticket_id).toBe('SEAT-112-F-14');
+    await flushAsync();
+    expect(mockOutbox[0].text.body).toContain('*Seat:* Section 112 · Row F · Seat 14');
+    expect(mockOutbox[0].text.body).toContain('Matched by seat');
+
+    const bySeat = await request(app).get('/api/tickets/lookup').query({ section: '112', row: 'F', seat: '14' });
+    expect(bySeat.body).toMatchObject({ found: true, matched_by: 'seat', origin_hub: 'West Hub' });
+  });
+
+  it('learns the seat for a ticket first logged by QR code only', async () => {
+    await scan(baseScan);
+    await scan({ ...baseScan, hub_location: 'South Hub', section: 'H2', row: 'K', seat: '7' });
+    const { rows } = await getPool().query('SELECT seat_key FROM tickets WHERE ticket_id = $1', [baseScan.ticket_id]);
+    expect(rows[0].seat_key).toBe('H2|K|7');
+  });
+
+  it('bot answers seat lookups in long and short form', async () => {
+    await scan({ ...baseScan, section: '112', row: 'F', seat: '14' });
+    const long = await handleInboundMessage({ id: crypto.randomUUID(), from: 'x', groupId: 'GROUP-SUPERVISORS', text: 'Check Section 112 Row F Seat 14' });
+    expect(long).toContain('🤖 *TICKET PROFILE RETRIEVED* 🤖');
+    expect(long).toContain('*Seat:* Section 112 · Row F · Seat 14');
+    const short = await handleInboundMessage({ id: crypto.randomUUID(), from: 'x', groupId: 'GROUP-SUPERVISORS', text: 'check 112 f 14' });
+    expect(short).toContain('*Ticket ID:* TM-847294-X');
+    const miss = await handleInboundMessage({ id: crypto.randomUUID(), from: 'x', groupId: 'GROUP-SUPERVISORS', text: 'Check sec 9 row A seat 1' });
+    expect(miss).toBe('❌ *No Database Record Extracted for Seat:* Section 9 · Row A · Seat 1');
+  });
+
+  it('answers a supervisor texting the bot directly and ignores unknown numbers', async () => {
+    process.env.WHATSAPP_SUPERVISOR_NUMBERS = '+44 7700 900123';
+    resetConfigCache();
+    try {
+      mockOutbox.length = 0;
+      const ok = await handleInboundMessage({ id: crypto.randomUUID(), from: '447700900123', groupId: null, text: 'Help' });
+      expect(ok).toContain('GATEKEEPER BOT');
+      expect(mockOutbox.at(-1)?.to).toBe('447700900123');
+      const stranger = await handleInboundMessage({ id: crypto.randomUUID(), from: '447700999999', groupId: null, text: 'Help' });
+      expect(stranger).toBeNull();
+
+      // Alerts now go to the group and to the supervisor's phone.
+      mockOutbox.length = 0;
+      await scan(baseScan);
+      await flushAsync();
+      expect(mockOutbox.map((m) => m.to).sort()).toEqual(['447700900123', 'GROUP-SUPERVISORS']);
+    } finally {
+      delete process.env.WHATSAPP_SUPERVISOR_NUMBERS;
+      resetConfigCache();
+    }
   });
 
   it('pre-check endpoint reports a flagged ticket', async () => {

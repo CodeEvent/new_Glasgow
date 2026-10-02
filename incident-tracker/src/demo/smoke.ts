@@ -22,7 +22,8 @@ Object.assign(process.env, {
 async function main() {
   const { PGlite } = await import('@electric-sql/pglite');
   const { createDemoEngine } = await import('./engine');
-  const sql = fs.readFileSync(path.resolve(__dirname, '../../migrations/001_init_incident_schema.up.sql'), 'utf8');
+  const migDir = path.resolve(__dirname, '../../migrations');
+  const sql = fs.readdirSync(migDir).filter((f) => f.endsWith('.up.sql')).sort().map((f) => fs.readFileSync(path.join(migDir, f), 'utf8')).join('\n');
   const engine = await createDemoEngine(await PGlite.create(), sql);
 
   const base = { ticket_id: 'TM-1', steward_name: 'Dave', party_size: 2, description: 'Green hat' };

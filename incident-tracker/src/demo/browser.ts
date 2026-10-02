@@ -4,7 +4,8 @@
  */
 import { PGlite } from '@electric-sql/pglite';
 // esbuild inlines the migration file as a string (text loader).
-import migrationSql from '../../migrations/001_init_incident_schema.up.sql';
+import migration001 from '../../migrations/001_init_incident_schema.up.sql';
+import migration002 from '../../migrations/002_seat_location.up.sql';
 import { createDemoEngine, type DemoEngine } from './engine';
 
 declare global {
@@ -45,5 +46,5 @@ window.gatekeeperReady = (async () => {
     loadFsBundle('pglite-data.gz.b64.txt'),
   ]);
   const db = await PGlite.create({ pgliteWasmModule, initdbWasmModule, fsBundle });
-  return createDemoEngine(db, migrationSql);
+  return createDemoEngine(db, [migration001, migration002].join('\n'));
 })();

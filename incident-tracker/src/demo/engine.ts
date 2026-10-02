@@ -46,7 +46,7 @@ export interface DemoState {
 
 export interface DemoEngine {
   scan(body: unknown): Promise<ApiResponse>;
-  lookup(ticketId: string): Promise<ApiResponse>;
+  lookup(query: { ticket_id?: string; section?: string; row?: string; seat?: string } | string): Promise<ApiResponse>;
   /** A supervisor typing into the WhatsApp group. */
   chat(text: string, sender?: string): Promise<{ handled: boolean }>;
   setOutage(down: boolean): Promise<void>;
@@ -74,7 +74,7 @@ export async function createDemoEngine(db: PGlite, migrationSql: string): Promis
   return {
     pool,
     scan: (body) => handleScanRequest(body),
-    lookup: (id) => handleTicketLookup(id),
+    lookup: (q) => handleTicketLookup(typeof q === 'string' ? { ticket_id: q } : q),
 
     async chat(text, sender = '447700900123') {
       // Shape the message exactly as Meta's webhook delivers it, then run the real parser + handler.

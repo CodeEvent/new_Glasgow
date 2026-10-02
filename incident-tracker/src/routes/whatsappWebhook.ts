@@ -2,7 +2,13 @@ import crypto from 'crypto';
 import { Router, type Request, type Response } from 'express';
 import { getConfig } from '../config/env';
 import { HELP_TEXT, parseCommand } from '../services/commandParser';
-import { formatNotFound, formatTicketProfile, getTicketProfile } from '../services/ticketLookup';
+import {
+  formatNotFound,
+  formatSeatNotFound,
+  formatTicketProfile,
+  getTicketProfile,
+  getTicketProfileBySeat,
+} from '../services/ticketLookup';
 import { sendGroupMessage } from '../services/whatsapp';
 
 export interface InboundTextMessage {
@@ -53,11 +59,18 @@ export function extractTextMessages(body: unknown): InboundTextMessage[] {
   return out;
 }
 
-/** Only messages from the designated supervisors' group are acted on. */
+/**
+ * Only the designated supervisors' group, or a supervisor texting the bot directly
+ * (WHATSAPP_SUPERVISOR_NUMBERS), is answered. Everyone else is ignored.
+ */
 export function isFromDesignatedGroup(msg: InboundTextMessage): boolean {
-  const groupId = getConfig().WHATSAPP_GROUP_ID;
-  // `from` match supports sandbox setups where the "group" is a single test number.
-  return msg.groupId === groupId || (msg.groupId === null && msg.from === groupId);
+  const cfg = getConfig();
+  const groupId = cfg.WHATSAPP_GROUP_ID;
+  if (groupId && msg.groupId === groupId) return true;
+  if (msg.groupId !== null) return false;
+  const from = msg.from.replace(/\D/g, '');
+  // `from === groupId` supports sandbox setups where the "group" is a single test number.
+  return (groupId !== undefined && msg.from === groupId) || cfg.WHATSAPP_SUPERVISOR_NUMBERS.includes(from);
 }
 
 /** Validates Meta's X-Hub-Signature-256 header when WHATSAPP_APP_SECRET is configured. */
@@ -82,7 +95,12 @@ function firstTime(id: string): boolean {
 
 /** Handles one inbound message; returns the reply body that was sent (or null). */
 export async function handleInboundMessage(msg: InboundTextMessage): Promise<string | null> {
-  if (!isFromDesignatedGroup(msg) || !firstTime(msg.id)) return null;
+  if (!isFromDesignatedGroup(msg)) {
+    // Shown in the server log so a first-time setup can see whose number to allow.
+    console.warn(`[webhook] ignored message from ${msg.from}${msg.groupId ? ` in group ${msg.groupId}` : ''} (not in WHATSAPP_SUPERVISOR_NUMBERS / WHATSAPP_GROUP_ID)`);
+    return null;
+  }
+  if (!firstTime(msg.id)) return null;
   const cmd = parseCommand(msg.text);
   if (!cmd) return null;
 
@@ -92,12 +110,19 @@ export async function handleInboundMessage(msg: InboundTextMessage): Promise<str
   } else if (cmd.kind === 'invalid_check') {
     reply = `⚠️ Could not read a ticket ID from that message.\n\n${HELP_TEXT}`;
   } else {
+    const what = cmd.kind === 'check' ? cmd.ticketId : `Section ${cmd.section} Row ${cmd.row} Seat ${cmd.seat}`;
     try {
-      const profile = await getTicketProfile(cmd.ticketId);
-      reply = profile ? formatTicketProfile(profile) : formatNotFound(cmd.ticketId);
+      if (cmd.kind === 'check') {
+        const profile = await getTicketProfile(cmd.ticketId);
+        reply = profile ? formatTicketProfile(profile) : formatNotFound(cmd.ticketId);
+      } else {
+        let profile = await getTicketProfileBySeat(cmd.section, cmd.row, cmd.seat);
+        if (!profile && cmd.fallbackTicketId) profile = await getTicketProfile(cmd.fallbackTicketId);
+        reply = profile ? formatTicketProfile(profile) : formatSeatNotFound(cmd.section, cmd.row, cmd.seat);
+      }
     } catch (err) {
       console.error('[webhook] lookup failed:', (err as Error).message);
-      reply = `⚠️ *Database unavailable* — could not look up ${cmd.ticketId}. Check the latest alerts in this chat and try again shortly.`;
+      reply = `⚠️ *Database unavailable*: could not look up ${what}. Check the latest alerts in this chat and try again shortly.`;
     }
   }
   const replyTo = msg.groupId ?? msg.from;

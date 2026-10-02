@@ -121,6 +121,7 @@ button, input, select { font: inherit; color: inherit; }
 .precheck.warn { background: var(--crit-soft); color: var(--crit); font-weight: 600; }
 .precheck.note { background: var(--sunk); color: var(--muted); }
 .hint { font-size: 12px; color: var(--muted); margin: 0; }
+.seat-row > .field { min-width: 0; flex: 1 1 70px; }
 
 .screen { position: absolute; inset: 0 16px 16px; border-radius: 14px; display: flex; flex-direction: column; justify-content: center; gap: 14px; padding: 24px; text-align: center; color: #fff; z-index: 3; }
 .screen h3 { margin: 0; font-family: var(--font-display); font-size: 34px; line-height: 1.05; letter-spacing: .02em; text-transform: uppercase; text-wrap: balance; }
@@ -274,6 +275,12 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
               </div>
               <div class="chips" id="recent" aria-label="Recently scanned tickets"></div>
             </div>
+            <div class="row seat-row">
+              <label class="field grow"><span>Section</span><input class="input mono" id="section" maxlength="16" autocomplete="off" placeholder="112"></label>
+              <label class="field grow"><span>Row</span><input class="input mono" id="rowNo" maxlength="8" autocomplete="off" placeholder="F"></label>
+              <label class="field grow"><span>Seat</span><input class="input mono" id="seatNo" maxlength="8" autocomplete="off" placeholder="14"></label>
+            </div>
+            <p class="hint">SafeTix codes change every few seconds, so the seat is how other gates recognise the same person. Clear the code and log by seat alone to try it.</p>
             <div class="precheck note" id="precheck">Enter or pick a ticket to check its history.</div>
 
             <div class="decision" role="radiogroup" aria-label="Decision">
@@ -313,14 +320,14 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
       <div class="scroll" id="feedScroll">
         <div class="feed" id="feed">
           <div class="day">Today</div>
-          <div class="empty-feed" id="emptyFeed">Alerts from the gates appear here. Submit a scan, or run a scenario from the control desk, then type <strong>Check</strong> and a ticket ID to ask the bot.</div>
+          <div class="empty-feed" id="emptyFeed">Alerts from the gates appear here. Submit a scan, or run a scenario from the control desk, then ask the bot: <strong>Check 112 F 14</strong> or <strong>Check TM-847294-X</strong>.</div>
         </div>
       </div>
       <div class="composer">
         <div class="chips" id="suggest"></div>
         <form id="chatForm">
           <label for="chatInput" class="eyebrow" hidden>Message the group</label>
-          <input id="chatInput" autocomplete="off" placeholder="Message as Head of Security… e.g. Check TM-847294-X">
+          <input id="chatInput" autocomplete="off" placeholder="Message as Head of Security… e.g. Check 112 F 14">
           <button class="btn accent send" type="submit">Send</button>
         </form>
       </div>
@@ -332,18 +339,18 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
       <div class="scroll">
         <div class="desk">
           <div>
-            <div class="section-title"><h2>Test checklist</h2><span id="progress">0 / 8</span></div>
+            <div class="section-title"><h2>Test checklist</h2><span id="progress">0 / 9</span></div>
             <ul class="checklist" id="checklist"></ul>
           </div>
 
           <div>
             <div class="section-title"><h2>Run a scenario</h2><span>Plays out on the gate phone</span></div>
             <div class="scenarios">
-              <button class="btn" data-scenario="hop">Hub hopper<small>Cool-off at West, tries South</small></button>
+              <button class="btn" data-scenario="hop">Hub hopper<small>Cool-off at West, tries South, then Hospitality with a rotated code</small></button>
               <button class="btn" data-scenario="breach">Bad admission<small>Refused at East, let in at Hospitality</small></button>
               <button class="btn" data-scenario="served">Cool-off served<small>30 min pass, re-admitted</small></button>
               <button class="btn" data-scenario="outage">Database outage<small>Buffer offline, then re-sync</small></button>
-              <button class="btn" data-scenario="bot">Ask the bot<small>Check a ticket + an unknown one</small></button>
+              <button class="btn" data-scenario="bot">Ask the bot<small>Check by seat + an unknown ticket</small></button>
               <button class="btn accent" data-scenario="all">Run all<small>Ticks the whole checklist</small></button>
             </div>
           </div>
@@ -406,7 +413,7 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
     return {
       label: 'Local server · mock WhatsApp',
       scan: (body) => fetch('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(json),
-      lookup: (id) => fetch('/api/tickets/' + encodeURIComponent(id)).then(json),
+      lookup: (q) => fetch('/api/tickets/lookup?' + new URLSearchParams(q)).then(json),
       chat: (text) => fetch('/demo/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) }).then((r) => r.json()),
       setOutage: (down) => fetch('/demo/api/outage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ down }) }),
       timeTravel: (ticket_id, minutes) => fetch('/demo/api/time-travel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticket_id, minutes }) }),
@@ -422,7 +429,7 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
     return {
       label: 'Runs in your browser · PostgreSQL (PGlite)',
       scan: (b) => engine.scan(b),
-      lookup: (id) => engine.lookup(id),
+      lookup: (q) => engine.lookup(q),
       chat: (t) => engine.chat(t),
       setOutage: (d) => engine.setOutage(d),
       timeTravel: (id, m) => engine.timeTravel(id, m),
@@ -454,6 +461,7 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
   const CHECKS = [
     ['a', 'New incident logged', 'Scenario A: cool-off or refusal saved and posted to the group'],
     ['b', 'Hub hopper intercepted', 'Scenario B: same ticket at another hub, steward blocked, high alert'],
+    ['seat', 'Rotated code matched by seat', 'A different QR code at the next gate, recognised by section / row / seat'],
     ['c', 'Unauthorized admission caught', 'Scenario C: flagged ticket admitted, critical alert names the steward'],
     ['served', 'Cool-off served correctly', 'Admitted after 30 min is logged as normal, not a breach'],
     ['bot', 'Bot answered "Check"', 'Ticket profile with scan history posted back to the group'],
@@ -477,6 +485,7 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
   let hub = 'West Hub';
   const stewardByHub = { ...STEWARDS };
   const recent = [];
+  const seatOf = {};
 
   function setHub(h) {
     stewardByHub[hub] = $('steward').value.trim() || STEWARDS[hub];
@@ -498,8 +507,25 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
   function randomTicket() {
     return `TM-${Math.floor(100000 + Math.random() * 900000)}-${'ABCDEFGHJKLMNPQRSTUVWXYZ'[Math.floor(Math.random() * 24)]}`;
   }
+  function randomSeat() {
+    return {
+      section: String(100 + Math.floor(Math.random() * 330)),
+      row: 'ABCDEFGHJKLMNPQRSTUVW'[Math.floor(Math.random() * 21)],
+      seat: String(1 + Math.floor(Math.random() * 30)),
+    };
+  }
+  function setSeat(s) {
+    $('section').value = s ? s.section : '';
+    $('rowNo').value = s ? s.row : '';
+    $('seatNo').value = s ? s.seat : '';
+  }
+  function seatParts() {
+    const section = $('section').value.trim(), row = $('rowNo').value.trim(), seat = $('seatNo').value.trim();
+    return section && row && seat ? { section, row, seat } : null;
+  }
   function freshPatron() {
     $('ticket').value = randomTicket();
+    setSeat(randomSeat());
     $('desc').value = DESCRIPTIONS[Math.floor(Math.random() * DESCRIPTIONS.length)];
     $('party').value = 1 + Math.floor(Math.random() * 4);
     document.querySelectorAll('#indicators input').forEach((c, i) => (c.checked = i < 2));
@@ -509,7 +535,8 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
   }
   $('newTicket').addEventListener('click', freshPatron);
 
-  function rememberTicket(id) {
+  function rememberTicket(id, seat) {
+    if (seat) seatOf[id] = seat;
     const i = recent.indexOf(id);
     if (i >= 0) recent.splice(i, 1);
     recent.unshift(id);
@@ -521,25 +548,28 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
     const t = e.target.closest('[data-t]');
     if (!t) return;
     $('ticket').value = t.dataset.t;
+    setSeat(seatOf[t.dataset.t] || null);
     precheck();
   });
 
   let precheckSeq = 0;
   async function precheck() {
     const id = $('ticket').value.trim();
+    const seat = seatParts();
     const box = $('precheck');
     const seq = ++precheckSeq;
-    if (!id) { box.className = 'precheck note'; box.textContent = 'Enter or pick a ticket to check its history.'; return; }
+    if (!id && !seat) { box.className = 'precheck note'; box.textContent = 'Enter a ticket code or a seat to check its history.'; return; }
     try {
-      const { status, body } = await api.lookup(id);
+      const { status, body } = await api.lookup({ ...(id ? { ticket_id: id } : {}), ...(seat || {}) });
       if (seq !== precheckSeq) return;
       if (status === 503) { box.className = 'precheck note'; box.textContent = 'Database offline: history check unavailable. Treat with caution.'; return; }
-      if (!body.found) { box.className = 'precheck ok'; box.textContent = 'No incident on record for this ticket.'; return; }
+      if (!body.found) { box.className = 'precheck ok'; box.textContent = 'No incident on record for this ticket or seat.'; return; }
       if (body.flagged) {
         const other = body.origin_hub && body.origin_hub !== hub;
         const left = body.mins_left ? ` · ${body.mins_left} min cool-off left` : '';
         box.className = 'precheck warn';
-        box.textContent = `⛔ ${STATUS_TEXT[body.ticket.current_status]} at ${body.origin_hub}${left}. ${body.ticket.description}${other ? ' · POSSIBLE HUB HOPPER' : ''}`;
+        const via = body.matched_by === 'seat' ? ' (matched by seat)' : '';
+        box.textContent = `⛔ ${STATUS_TEXT[body.ticket.current_status]} at ${body.origin_hub}${left}${via}. ${body.ticket.description}${other ? ' · POSSIBLE HUB HOPPER' : ''}`;
       } else {
         box.className = 'precheck note';
         box.textContent = `Previously admitted · ${body.ticket.events.length} scan(s) on record.`;
@@ -547,12 +577,15 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
     } catch { box.className = 'precheck note'; box.textContent = 'Could not check history.'; }
   }
   let typingTimer;
-  $('ticket').addEventListener('input', () => { clearTimeout(typingTimer); typingTimer = setTimeout(precheck, 300); });
+  for (const id of ['ticket', 'section', 'rowNo', 'seatNo']) {
+    $(id).addEventListener('input', () => { clearTimeout(typingTimer); typingTimer = setTimeout(precheck, 300); });
+  }
 
   function readForm() {
     const action = document.querySelector('input[name=action]:checked');
     return {
-      ticket_id: $('ticket').value.trim(),
+      ticket_id: $('ticket').value.trim() || undefined,
+      ...(seatParts() || {}),
       hub_location: hub,
       steward_name: $('steward').value.trim(),
       action_logged: action ? action.value : undefined,
@@ -586,11 +619,13 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
       const sc = body.scenario;
       if (sc === 'NEW_INCIDENT') tick('a');
       if (sc === 'HUB_HOP_BYPASS') tick('b');
+      if (sc && payload.ticket_id && body.ticket && body.ticket.ticket_id !== payload.ticket_id) tick('seat');
       if (sc === 'UNAUTHORIZED_ADMISSION') tick('c');
       if (sc === 'CLEARED_ADMISSION') tick('served');
       showScreen(body.screen || { level: 'warning', headline: 'Error', message: body.error || 'Unknown error' },
         body.buffered ? `HTTP ${status} · saved to offline_incidents.log` : `HTTP ${status} · ${sc || ''}${body.is_breach ? ' · breach event logged' : ''}`);
-      if (payload.ticket_id) rememberTicket(payload.ticket_id);
+      if (body.ticket) rememberTicket(body.ticket.ticket_id, body.ticket.section ? { section: body.ticket.section, row: body.ticket.row_label, seat: body.ticket.seat_number } : null);
+      else if (payload.ticket_id) rememberTicket(payload.ticket_id, seatParts());
       refresh();
       return body;
     } finally {
@@ -601,7 +636,7 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
   $('scanForm').addEventListener('submit', (e) => {
     e.preventDefault();
     const p = readForm();
-    if (!p.ticket_id) { showScreen({ level: 'warning', headline: 'No ticket', message: 'Enter a ticket ID or tap "New patron".' }); return; }
+    if (!p.ticket_id && !p.section) { showScreen({ level: 'warning', headline: 'No ticket', message: 'Enter a ticket code or the full seat, or tap "New patron".' }); return; }
     if (!p.action_logged) { showScreen({ level: 'warning', headline: 'Pick a decision', message: 'Choose sent away, refused or admitted.' }); return; }
     submitScan(p);
   });
@@ -645,7 +680,13 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
     sendChat(t);
   });
   function renderSuggestions() {
-    const items = [...recent.slice(0, 2).map((t) => `Check ${t}`), 'Check TM-000000-Z', 'Help'];
+    const first = recent[0];
+    const items = [
+      ...(first && seatOf[first] ? [`Check Section ${seatOf[first].section} Row ${seatOf[first].row} Seat ${seatOf[first].seat}`] : []),
+      ...recent.slice(0, 2).map((t) => `Check ${t}`),
+      'Check TM-000000-Z',
+      'Help',
+    ];
     $('suggest').innerHTML = items.map((s) => `<button type="button" class="chip" data-s="${esc(s)}">${esc(s)}</button>`).join('');
   }
   $('suggest').addEventListener('click', (e) => { const b = e.target.closest('[data-s]'); if (b) sendChat(b.dataset.s); });
@@ -753,7 +794,8 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
 
   async function gateScan(h, action, opts = {}) {
     setHub(h);
-    if (opts.ticket) $('ticket').value = opts.ticket;
+    if (opts.ticket !== undefined) $('ticket').value = opts.ticket;
+    if (opts.seat !== undefined) setSeat(opts.seat);
     if (opts.desc) $('desc').value = opts.desc;
     if (opts.party) $('party').value = opts.party;
     if (opts.steward) $('steward').value = opts.steward;
@@ -770,9 +812,11 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
     async hop() {
       freshPatron();
       const t = $('ticket').value;
+      const seat = seatParts();
       await gateScan('West Hub', 'cool_off', { desc: 'Male, 6ft, neon green bucket hat, black puffer jacket', party: 4 });
-      await gateScan('South Hub', 'cool_off', { ticket: t });
-      await gateScan('Hospitality Hub', 'cool_off', { ticket: t });
+      await gateScan('South Hub', 'cool_off', { ticket: t, seat });
+      // Ten minutes later the SafeTix code has rotated: a new code, the same seat.
+      await gateScan('Hospitality Hub', 'cool_off', { ticket: randomTicket(), seat });
       return t;
     },
     async breach() {
@@ -804,16 +848,18 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
     },
     async bot() {
       const t = recent[0] || (await SCENARIOS.hop());
-      await sendChat(`Check ${t}`);
+      const st = seatOf[t];
+      await sendChat(st ? `Check ${st.section} ${st.row} ${st.seat}` : `Check ${t}`);
       await wait(900);
       await sendChat('Check TM-000000-Z');
     },
     async all() {
       const t = await SCENARIOS.hop();
+      const st = seatOf[t];
       await SCENARIOS.breach();
       await SCENARIOS.served();
       await SCENARIOS.outage();
-      await sendChat(`Check ${t}`);
+      await sendChat(st ? `Check Section ${st.section} Row ${st.row} Seat ${st.seat}` : `Check ${t}`);
       await wait(900);
       await sendChat('Check TM-000000-Z');
     },

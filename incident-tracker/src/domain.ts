@@ -26,6 +26,10 @@ export interface TicketRow {
   cool_down_until: Date | null;
   created_at: Date;
   updated_at: Date;
+  section: string | null;
+  row_label: string | null;
+  seat_number: string | null;
+  seat_key: string | null;
 }
 
 export interface ScanEventRow {
@@ -38,4 +42,18 @@ export interface ScanEventRow {
   action_logged: LoggedAction;
   is_breach_event: boolean;
   timestamp: Date;
+}
+
+/** Same normalisation as the generated tickets.seat_key column: upper-case, whitespace removed. */
+export function normalizeSeatPart(part: string): string {
+  return part.replace(/\s+/g, '').toUpperCase();
+}
+
+export function seatKey(section: string, row: string, seat: string): string {
+  return [section, row, seat].map(normalizeSeatPart).join('|');
+}
+
+export function seatLabel(section: string | null, row: string | null, seat: string | null): string | null {
+  if (!section || !row || !seat) return null;
+  return `Section ${section} · Row ${row} · Seat ${seat}`;
 }

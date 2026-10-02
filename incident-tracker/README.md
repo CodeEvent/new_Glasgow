@@ -12,6 +12,8 @@ Steward phone (public/index.html) ──POST /api/scan──▶ Express API ─�
 WhatsApp group ──"Check X"──▶ POST /api/whatsapp/incoming ──▶ lookup ──▶ reply to group
 ```
 
+> **To text it from your own WhatsApp, follow [GO_LIVE.md](GO_LIVE.md).** It covers Supabase, Render and the Meta WhatsApp app, step by step.
+
 ## Quick start
 
 ```bash
@@ -63,7 +65,8 @@ Payload:
 
 ```json
 {
-  "ticket_id": "TM-847294-X",
+  "ticket_id": "TM-847294-X",            // text from the ticket QR code; optional if the seat is given
+  "section": "112", "row": "F", "seat": "14", // optional, but needed to recognise rotating SafeTix codes
   "hub_location": "West Hub",
   "latitude": 55.8497, "longitude": -4.2055,
   "steward_name": "Supervisor Dave",
@@ -97,13 +100,15 @@ The response includes a `screen` object (`level`, `block_entry`, `headline`, `me
 
 **Outbound** (`src/services/whatsapp.ts`): `POST https://graph.facebook.com/{WHATSAPP_API_VERSION}/{WHATSAPP_PHONE_NUMBER_ID}/messages` with `Authorization: Bearer $WHATSAPP_ACCESS_TOKEN` and the standard `messaging_product / to / type / text` body. Failed sends are retried with exponential backoff on 429, 5xx and network errors. Messages that still fail are written to `failed_whatsapp_alerts.log`.
 
+**Who gets alerts:** the group in `WHATSAPP_GROUP_ID` (if your account has Cloud API Groups) and every number in `WHATSAPP_SUPERVISOR_NUMBERS`. Those numbers may also text the bot directly; anyone else is ignored and logged. If Meta refuses a message because the person hasn't written in 24 hours (error 131047), the alert is resent through the approved template in `WHATSAPP_ALERT_TEMPLATE`.
+
 **Inbound** (`src/routes/whatsappWebhook.ts`):
 
 - `GET /api/whatsapp/incoming` handles Meta's verification handshake. It returns `hub.challenge` as `text/plain` with HTTP 200 when `hub.verify_token` matches.
 - `POST /api/whatsapp/incoming` replies 200 straight away, then:
   - ignores anything not from `WHATSAPP_GROUP_ID`;
   - skips Meta's retried deliveries, so each message is answered once;
-  - parses `Check <ID>` (case-insensitive, spaces inside the ID are stripped) and `Help`;
+  - parses `Check <ID>`, `Check Section 112 Row F Seat 14`, `Check 112 F 14` (case-insensitive) and `Help`;
   - replies with the ticket profile and scan history, or `❌ *No Database Record Extracted for Ticket ID:* …`.
 - Set `WHATSAPP_APP_SECRET` to require a valid `X-Hub-Signature-256` on every inbound call. Without it, anyone who finds the URL can post fake messages, so set it in production.
 
@@ -118,7 +123,7 @@ Meta setup: in your Meta app, add the WhatsApp product. Set the callback URL to 
   - Invalid entries go to `offline_incidents.rejected.log`.
   - Manual replay: `npm run resync` (add `-- --no-alerts` to replay without sending messages).
 - **Device queue.** If the phone has no signal, the form saves the submission on the phone and sends it automatically when signal returns. It keeps the original scan time.
-- **Startup checks.** The server exits with code 1 and lists every problem if `DATABASE_URL`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_GROUP_ID` or `WHATSAPP_VERIFY_TOKEN` is missing or blank.
+- **Startup checks.** The server exits with code 1 and lists every problem if `DATABASE_URL`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` or `WHATSAPP_VERIFY_TOKEN` is missing or blank, or if neither `WHATSAPP_GROUP_ID` nor `WHATSAPP_SUPERVISOR_NUMBERS` is set.
 - **Health endpoints.** `GET /healthz` (liveness). `GET /readyz` (database status and whether an offline backlog exists).
 - **Steward auth.** Set `STEWARD_API_KEY` and the form/API require it as `x-api-key`. The Meta webhook is never behind this key.
 
@@ -149,5 +154,5 @@ Unit tests always run. Integration tests run against a real PostgreSQL when `TES
 
 ## Operational notes
 
-- **Ticketmaster SafeTix:** SafeTix barcodes **rotate every few seconds** (they're time-based codes), so the raw QR string from a phone screen is not a stable ticket key. The same person would look like a new ticket at the next hub, and hub-hop detection would silently fail. Before rollout, confirm what your scanners actually read. Use a stable value: the printed ticket/order number, or the static part of the barcode your ticketing team can identify. `ticket_id` is capped at 64 characters by the schema.
+- **Ticketmaster SafeTix:** SafeTix codes rotate every few seconds, so the QR text alone can't link the same person across gates. Stewards also enter **section, row and seat**. When a scan has an unknown code but a known seat, it's matched to the existing record (`matchedBy: 'seat'`), and the alert says so. Scans can be logged by seat alone (ticket ID `SEAT-112-F-14`). QR text longer than 64 characters is stored as a SHA-256 fingerprint (`QR-…`).
 - Supervisors receive descriptions of individuals. Agree a retention period and purge old `tickets` rows after each event (deleting a ticket cascades to its `scan_events`).

@@ -41,7 +41,13 @@ async function main() {
 
   const dataDir = process.env.DEMO_DATA_DIR;
   const db = dataDir ? await PGlite.create(path.resolve(dataDir)) : await PGlite.create();
-  const migration = fs.readFileSync(path.join(ROOT, 'migrations', '001_init_incident_schema.up.sql'), 'utf8');
+  const migDir = path.join(ROOT, 'migrations');
+  const migration = fs
+    .readdirSync(migDir)
+    .filter((f) => f.endsWith('.up.sql'))
+    .sort()
+    .map((f) => fs.readFileSync(path.join(migDir, f), 'utf8'))
+    .join('\n');
   const engine = await createDemoEngine(db, migration);
 
   const ui = fs.readFileSync(path.join(ROOT, 'demo', 'ui.html'), 'utf8');

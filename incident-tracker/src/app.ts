@@ -46,6 +46,11 @@ export function createApp(opts: { extend?: (app: express.Express) => void } = {}
 
   opts.extend?.(app);
 
+  // QR decoder for phones without the native BarcodeDetector (iPhone Safari, Firefox).
+  app.get('/vendor/jsQR.js', (_req, res) => {
+    res.sendFile(require.resolve('jsqr/dist/jsQR.js'), { maxAge: '7d' });
+  });
+
   // Steward intake form (mobile web app).
   app.use(express.static(path.resolve(__dirname, '..', 'public'), { maxAge: '5m' }));
 

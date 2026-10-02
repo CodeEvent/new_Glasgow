@@ -2,7 +2,7 @@ import { isConnectivityError } from '../db/pool';
 import { statusLabel } from './format';
 import { runScanPipeline, type PipelineResult } from './scanPipeline';
 import { scanInputSchema } from './scanService';
-import { getTicketProfile } from './ticketLookup';
+import { getTicketProfile, getTicketProfileBySeat } from './ticketLookup';
 
 /**
  * Transport-agnostic handlers behind POST /api/scan and GET /api/tickets/:id.
@@ -56,19 +56,42 @@ export async function handleScanRequest(
   }
 }
 
-export async function handleTicketLookup(rawId: unknown): Promise<ApiResponse> {
-  const id = String(rawId ?? '').trim();
-  if (!id || id.length > 64) {
-    return { status: 400, body: { ok: false, error: 'ticket_id must be 1-64 characters' } };
+export interface LookupQuery {
+  ticket_id?: unknown;
+  section?: unknown;
+  row?: unknown;
+  seat?: unknown;
+}
+
+/** Looks a patron up by ticket code, falling back to section / row / seat. Accepts a bare ID for compatibility. */
+export async function handleTicketLookup(query: unknown): Promise<ApiResponse> {
+  const q: LookupQuery = typeof query === 'object' && query !== null ? (query as LookupQuery) : { ticket_id: query };
+  const str = (v: unknown, max: number) => {
+    const s = typeof v === 'string' ? v.trim() : '';
+    return s && s.length <= max ? s : '';
+  };
+  const id = str(q.ticket_id, 64);
+  const section = str(q.section, 16);
+  const row = str(q.row, 8);
+  const seat = str(q.seat, 8);
+  const hasSeat = Boolean(section && row && seat);
+  if (!id && !hasSeat) {
+    return { status: 400, body: { ok: false, error: 'Give a ticket_id (1-64 characters) or section, row and seat' } };
   }
   try {
-    const p = await getTicketProfile(id);
+    let matchedBy: 'ticket' | 'seat' = 'ticket';
+    let p = id ? await getTicketProfile(id) : null;
+    if (!p && hasSeat) {
+      p = await getTicketProfileBySeat(section, row, seat);
+      matchedBy = 'seat';
+    }
     if (!p) return { status: 200, body: { ok: true, found: false } };
     return {
       status: 200,
       body: {
         ok: true,
         found: true,
+        matched_by: matchedBy,
         flagged: p.current_status !== 'admitted',
         status_label: statusLabel(p.current_status),
         origin_hub:
