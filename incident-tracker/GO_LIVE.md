@@ -119,6 +119,8 @@ You can keep `WHATSAPP_SUPERVISOR_NUMBERS` as well, so people can text the bot p
 |---|---|
 | Meta says "Verify and save" failed | The URL must end in `/api/whatsapp/incoming`, with the exact `WHATSAPP_VERIFY_TOKEN`, and the service must be live (`/healthz`). |
 | You text the bot and get nothing back | Render → **Logs**. `ignored message from 44…` means that number isn't in `WHATSAPP_SUPERVISOR_NUMBERS`; add it exactly as shown. No log line at all means the **messages** webhook field isn't subscribed. |
+| Messages show "Business Account locked" (`Meta 131031`) | Meta has restricted the WhatsApp Business account or portfolio, which is common for brand-new ones. In Graph API Explorer run `GET <WABA_ID>?fields=health_status` to see what is blocked, then **Request review** in business.facebook.com → Business Support Home. Complete Business info and turn on two-factor authentication while you wait. |
+| Logs show `Meta 131030` | Your number isn't on the test number's recipient list (API Setup → To → Manage phone number list). |
 | Logs show `Meta 131047` | The 24-hour rule (step 7). Text `Help` to the bot, or set up the template. |
 | Logs show `Meta 190` or `HTTP 401` | The access token expired. Do step 6. |
 | Logs show `HTTP 401` on inbound webhooks | `WHATSAPP_APP_SECRET` doesn't match the app's secret. |

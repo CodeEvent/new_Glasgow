@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { loadConfig, EnvValidationError } from '../src/config/env';
 import { parseCommand } from '../src/services/commandParser';
 import { buildTextPayload, flattenForTemplate, graphMessagesUrl } from '../src/services/whatsapp';
-import { extractTextMessages, isFromDesignatedGroup } from '../src/routes/whatsappWebhook';
+import { extractFailedDeliveries, extractTextMessages, isFromDesignatedGroup } from '../src/routes/whatsappWebhook';
 
 describe('environment validation', () => {
   it('lists every missing required variable', () => {
@@ -100,6 +100,26 @@ describe('inbound payload extraction', () => {
     expect(isFromDesignatedGroup(other)).toBe(false);
     const [direct] = extractTextMessages(body(undefined));
     expect(isFromDesignatedGroup(direct)).toBe(false);
+  });
+
+  it('reports failed delivery receipts with a hint', () => {
+    // Shape of a real Meta status webhook (error 131031, business account locked).
+    const failed = {
+      object: 'whatsapp_business_account',
+      entry: [{ id: '1740516213728962', changes: [{ field: 'messages', value: {
+        messaging_product: 'whatsapp',
+        statuses: [
+          { id: 'wamid.A', status: 'failed', recipient_id: '447494196195',
+            errors: [{ code: 131031, title: 'Business Account locked', error_data: { details: 'Business account has been locked.' } }] },
+          { id: 'wamid.B', status: 'delivered', recipient_id: '447494196195' },
+        ],
+      } }] }],
+    };
+    const [f, ...rest] = extractFailedDeliveries(failed);
+    expect(rest).toHaveLength(0);
+    expect(f).toMatchObject({ recipient: '447494196195', code: 131031, title: 'Business account has been locked.' });
+    expect(f.hint).toContain('health_status');
+    expect(extractTextMessages(failed)).toEqual([]);
   });
 
   it('survives junk payloads', () => {

@@ -27,14 +27,62 @@ interface MetaMessage {
   text?: { body?: string };
   context?: { group_id?: string };
 }
+interface MetaStatus {
+  id?: string;
+  status?: string;
+  recipient_id?: string;
+  errors?: Array<{ code?: number; title?: string; message?: string; error_data?: { details?: string } }>;
+}
 interface MetaWebhookBody {
   object?: string;
   entry?: Array<{
     changes?: Array<{
       field?: string;
-      value?: { group_id?: string; metadata?: { group_id?: string }; messages?: MetaMessage[] };
+      value?: { group_id?: string; metadata?: { group_id?: string }; messages?: MetaMessage[]; statuses?: MetaStatus[] };
     }>;
   }>;
+}
+
+export interface FailedDelivery {
+  messageId: string;
+  recipient: string;
+  code: number | null;
+  title: string;
+  hint: string | null;
+}
+
+/** What to do about the delivery errors people hit most often while setting up. */
+const DELIVERY_HINTS: Record<number, string> = {
+  131031: 'Meta has locked or restricted the WhatsApp Business account. Check GET <WABA_ID>?fields=health_status and request a review in Business Support Home.',
+  131047: 'The recipient has not messaged the bot in 24 hours. Ask them to text "Help", or set WHATSAPP_ALERT_TEMPLATE.',
+  131030: 'The recipient is not on the test number\'s allowed list. Add them under WhatsApp > API Setup > To.',
+  131026: 'The recipient cannot receive this message (not on WhatsApp, old app version, or they blocked the number).',
+  131042: 'Payment problem on the WhatsApp Business account. Check the payment method in WhatsApp Manager.',
+  190: 'The access token is invalid or expired. Generate a new one (see GO_LIVE.md step 6).',
+};
+
+/** Failed delivery receipts from Meta (status webhooks) for alerts and bot replies we sent. */
+export function extractFailedDeliveries(body: unknown): FailedDelivery[] {
+  const out: FailedDelivery[] = [];
+  const b = body as MetaWebhookBody;
+  if (!b || !Array.isArray(b.entry)) return out;
+  for (const entry of b.entry) {
+    for (const change of entry.changes ?? []) {
+      for (const st of change.value?.statuses ?? []) {
+        if (st.status !== 'failed') continue;
+        const err = st.errors?.[0];
+        const code = typeof err?.code === 'number' ? err.code : null;
+        out.push({
+          messageId: st.id ?? '',
+          recipient: st.recipient_id ?? '',
+          code,
+          title: err?.error_data?.details ?? err?.title ?? err?.message ?? 'unknown error',
+          hint: code !== null ? (DELIVERY_HINTS[code] ?? null) : null,
+        });
+      }
+    }
+  }
+  return out;
 }
 
 /** Flattens a Meta webhook body into text messages, tolerating the various group-id placements. */
@@ -160,6 +208,12 @@ whatsappWebhookRouter.post('/incoming', (req: Request, res: Response) => {
     return;
   }
   res.sendStatus(200);
+
+  for (const f of extractFailedDeliveries(req.body)) {
+    console.error(
+      `[whatsapp] delivery to ${f.recipient} FAILED (Meta ${f.code ?? '?'}: ${f.title})${f.hint ? ` -> ${f.hint}` : ''}`,
+    );
+  }
 
   const messages = extractTextMessages(req.body);
   for (const msg of messages) {
