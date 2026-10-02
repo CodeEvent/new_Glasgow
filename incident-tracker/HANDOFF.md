@@ -32,9 +32,18 @@ The owner accepted the risk: this is unofficial, WhatsApp's terms don't allow it
 - `src/routes/admin.ts` + `src/middleware/adminAuth.ts`: `/admin/whatsapp` page route and JSON API under `/admin/api/whatsapp/*` (`status` with QR as data URL, `pair`, `groups` GET/POST, `test`, `logout`), protected by header `x-admin-key`.
 - `src/server.ts`: starts the bot when `WA_LINKED_ENABLED=true`.
 
-## Still to do
+## Update (later session)
 
-1. **`public/admin-whatsapp.html`** (missing; the route already points at it). A mobile-friendly setup page:
+- `public/admin-whatsapp.html` now exists: admin key, live status, QR or pairing code, group picker, test message, unlink. It loads and the admin key check works. It was not tested against real WhatsApp, because the build sandbox's network blocks web.whatsapp.com.
+- `linkedWhatsApp.ts` now logs every connection close with its code and reason (`[linked-wa] connection closed (code …)`).
+- **Direction change pending:** the owner wants the simplest possible WhatsApp-only flow.
+  - Stewards log a person by sending a photo with a caption like `REFUSED BB 212 100` or `30 BB 212 100`.
+  - Anyone checks a person by sending the seat.
+  - Waiting on the owner's answers to five questions: group or private chat, caption vs step-by-step logging, optional gate, retention (suggested 24 h auto-delete), free-text notes.
+
+## Still to do (original list; item 1 is done)
+
+1. ~~**`public/admin-whatsapp.html`**~~ Done, see above. Original spec: A mobile-friendly setup page:
    - field for the admin key (keep it in `sessionStorage`), sent as `x-admin-key`;
    - poll `GET /admin/api/whatsapp/status` every 3 s and show the status;
    - while `waiting_for_link`, show the QR (`qr` is a data URL), with instructions: on the spare phone, WhatsApp → Settings → Linked devices → Link a device;

@@ -142,6 +142,7 @@ export class LinkedWhatsApp {
   }
 
   private async connect(): Promise<void> {
+    if (this.status !== 'waiting_for_link' && this.status !== 'logged_out') this.status = 'starting';
     const b = await loadBaileys();
     const { state, saveCreds } = await usePostgresAuthState(b);
 
@@ -159,6 +160,7 @@ export class LinkedWhatsApp {
     const browser = b.Browsers.ubuntu?.('Gatekeeper') ?? b.Browsers.appropriate?.('Gatekeeper');
     const sock = make({
       ...(version ? { version } : {}),
+      connectTimeoutMs: 20_000,
       auth: state,
       logger: quietLogger,
       browser,
@@ -189,6 +191,7 @@ export class LinkedWhatsApp {
       if (u.connection === 'close') {
         const code = u.lastDisconnect?.error?.output?.statusCode;
         this.lastError = u.lastDisconnect?.error?.message ?? null;
+        console.warn(`[linked-wa] connection closed (code ${code ?? 'none'}: ${this.lastError ?? 'no reason given'})`);
         sock.ev.removeAllListeners();
         if (this.sock === sock) this.sock = null;
         if (this.stopped) return;
