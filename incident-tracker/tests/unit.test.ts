@@ -76,7 +76,7 @@ describe('command parser', () => {
 
 describe('outbound payload', () => {
   it('matches the Meta Cloud API text message contract', () => {
-    expect(graphMessagesUrl()).toBe('https://graph.facebook.com/v21.0/1234567890/messages');
+    expect(graphMessagesUrl()).toBe('https://graph.facebook.com/v25.0/1234567890/messages');
     expect(buildTextPayload('hello')).toEqual({
       messaging_product: 'whatsapp',
       to: 'GROUP-SUPERVISORS',

@@ -46,7 +46,7 @@ const envObject = z.object({
   MOCK_WHATSAPP_API: boolFlag,
   // Suppress the console box print in mock mode (the demo UI shows messages instead).
   MOCK_WHATSAPP_QUIET: boolFlag,
-  WHATSAPP_API_VERSION: z.string().trim().default('v21.0'),
+  WHATSAPP_API_VERSION: z.string().trim().default('v25.0'),
   WHATSAPP_GRAPH_BASE_URL: z.string().trim().default('https://graph.facebook.com'),
   // Set to "group" if your Cloud API account uses the Groups API recipient model.
   WHATSAPP_RECIPIENT_TYPE: z.string().trim().optional(),

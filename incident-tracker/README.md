@@ -98,7 +98,7 @@ The response includes a `screen` object (`level`, `block_entry`, `headline`, `me
 
 ## WhatsApp
 
-**Outbound** (`src/services/whatsapp.ts`): `POST https://graph.facebook.com/{WHATSAPP_API_VERSION}/{WHATSAPP_PHONE_NUMBER_ID}/messages` with `Authorization: Bearer $WHATSAPP_ACCESS_TOKEN` and the standard `messaging_product / to / type / text` body. Failed sends are retried with exponential backoff on 429, 5xx and network errors. Messages that still fail are written to `failed_whatsapp_alerts.log`.
+**Outbound** (`src/services/whatsapp.ts`): `POST https://graph.facebook.com/{WHATSAPP_API_VERSION} (default v25.0)/{WHATSAPP_PHONE_NUMBER_ID}/messages` with `Authorization: Bearer $WHATSAPP_ACCESS_TOKEN` and the standard `messaging_product / to / type / text` body. Failed sends are retried with exponential backoff on 429, 5xx and network errors. Messages that still fail are written to `failed_whatsapp_alerts.log`.
 
 **Who gets alerts:** the group in `WHATSAPP_GROUP_ID` (if your account has Cloud API Groups) and every number in `WHATSAPP_SUPERVISOR_NUMBERS`. Those numbers may also text the bot directly; anyone else is ignored and logged. If Meta refuses a message because the person hasn't written in 24 hours (error 131047), the alert is resent through the approved template in `WHATSAPP_ALERT_TEMPLATE`.
 
