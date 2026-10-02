@@ -27,7 +27,17 @@ const MAX_ATTEMPTS = 4;
 const FAILED_ALERTS_LOG = 'failed_whatsapp_alerts.log';
 
 /** Captured outbound messages when MOCK_WHATSAPP_API=true (used by tests and the simulator). */
-export const mockOutbox: Array<OutboundTextPayload & { priority: MessagePriority; sent_at: string }> = [];
+export type MockMessage = OutboundTextPayload & { priority: MessagePriority; sent_at: string };
+export const mockOutbox: MockMessage[] = [];
+
+type MockListener = (msg: MockMessage) => void;
+const mockListeners = new Set<MockListener>();
+
+/** Subscribe to mock-mode sends (demo UI live feed). Returns an unsubscribe function. */
+export function onMockMessage(listener: MockListener): () => void {
+  mockListeners.add(listener);
+  return () => mockListeners.delete(listener);
+}
 
 export function graphMessagesUrl(): string {
   const cfg = getConfig();
@@ -80,8 +90,16 @@ export async function sendGroupMessage(
   const payload = buildTextPayload(body, to);
 
   if (cfg.MOCK_WHATSAPP_API) {
-    mockOutbox.push({ ...payload, priority, sent_at: new Date().toISOString() });
-    if (cfg.NODE_ENV !== 'test') {
+    const sent: MockMessage = { ...payload, priority, sent_at: new Date().toISOString() };
+    mockOutbox.push(sent);
+    for (const l of mockListeners) {
+      try {
+        l(sent);
+      } catch (e) {
+        console.error('[whatsapp] mock listener failed:', e);
+      }
+    }
+    if (cfg.NODE_ENV !== 'test' && !cfg.MOCK_WHATSAPP_QUIET) {
       const bar = '─'.repeat(60);
       console.log(`\n┌${bar}\n│ [MOCK WHATSAPP] priority=${priority.toUpperCase()} to=${payload.to}\n├${bar}`);
       for (const line of payload.text.body.split('\n')) console.log(`│ ${line}`);

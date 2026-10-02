@@ -5,7 +5,14 @@
 -- =====================================================================
 
 -- gen_random_uuid() is core since PG13; pgcrypto keeps older hosts working.
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+-- Best-effort so hosts without the extension (e.g. embedded PGlite) still migrate.
+DO $$
+BEGIN
+    CREATE EXTENSION IF NOT EXISTS pgcrypto;
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'pgcrypto unavailable (%); relying on core gen_random_uuid()', SQLERRM;
+END
+$$;
 
 CREATE TYPE incident_status AS ENUM ('cooling_off', 'completely_refused', 'admitted');
 CREATE TYPE screening_hub AS ENUM ('East Hub', 'West Hub', 'South Hub', 'Hospitality Hub');

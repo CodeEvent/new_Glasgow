@@ -3,3 +3,5 @@ dist/
 .env
 offline_incidents.log
 *.log
+demo-data/
+dist-web/

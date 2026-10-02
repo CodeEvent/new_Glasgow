@@ -26,6 +26,8 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   NODE_ENV: z.string().default('development'),
   MOCK_WHATSAPP_API: boolFlag,
+  // Suppress the console box print in mock mode (the demo UI shows messages instead).
+  MOCK_WHATSAPP_QUIET: boolFlag,
   WHATSAPP_API_VERSION: z.string().trim().default('v21.0'),
   WHATSAPP_GRAPH_BASE_URL: z.string().trim().default('https://graph.facebook.com'),
   // Set to "group" if your Cloud API account uses the Groups API recipient model.
@@ -35,6 +37,8 @@ const envSchema = z.object({
   DATABASE_SSL: boolFlag,
   OFFLINE_LOG_PATH: z.string().trim().default('offline_incidents.log'),
   COOL_OFF_MINUTES: z.coerce.number().int().positive().default(30),
+  DB_POOL_MAX: z.coerce.number().int().positive().default(10),
+  OFFLINE_SYNC_INTERVAL_MS: z.coerce.number().int().min(500).default(15_000),
   TZ_DISPLAY: z.string().trim().default('Europe/London'),
 });
 

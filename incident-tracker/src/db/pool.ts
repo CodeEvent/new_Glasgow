@@ -1,23 +1,32 @@
 import { Pool, PoolClient } from 'pg';
 import { getConfig } from '../config/env';
 
-let pool: Pool | null = null;
+/** The subset of pg.Pool the app uses, so an embedded engine (PGlite) can stand in for demos. */
+export type PoolLike = Pick<Pool, 'query' | 'connect' | 'end'>;
 
-export function getPool(): Pool {
+let pool: PoolLike | null = null;
+
+/** Replace the connection pool (demo / embedded database). */
+export function setPool(custom: PoolLike | null): void {
+  pool = custom;
+}
+
+export function getPool(): PoolLike {
   if (!pool) {
     const cfg = getConfig();
-    pool = new Pool({
+    const pgPool = new Pool({
       connectionString: cfg.DATABASE_URL,
       // Supabase requires TLS; its pooler presents a cert chain Node may not trust by default.
       ssl: cfg.DATABASE_SSL ? { rejectUnauthorized: false } : undefined,
-      max: 10,
+      max: cfg.DB_POOL_MAX,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 5_000,
       statement_timeout: 10_000,
       application_name: 'hub-incident-tracker',
     });
     // An idle client erroring (e.g. DB restart) must not crash the process.
-    pool.on('error', (err) => console.error('[db] idle client error:', err.message));
+    pgPool.on('error', (err) => console.error('[db] idle client error:', err.message));
+    pool = pgPool;
   }
   return pool;
 }

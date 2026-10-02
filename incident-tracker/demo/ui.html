@@ -1,0 +1,860 @@
+<title>Gatekeeper Control Room</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: control-room triptych. Gate phone (left), the supervisors' WhatsApp group (centre),
+   control desk with test checklist + live database (right). Tabs replace columns on phones. */
+:root {
+  --ground: #eef1f5;
+  --panel: #ffffff;
+  --sunk: #f5f7fa;
+  --ink: #15233d;
+  --muted: #5a6a81;
+  --line: #d6dde7;
+  --accent: #e3a400;      /* hi-vis steward vest */
+  --accent-ink: #15233d;
+  --chat: #e6ebf1;
+  --bubble-bot: #ffffff;
+  --bubble-me: #d9efe1;
+  --crit: #c62828;
+  --crit-soft: #fde8e8;
+  --warn: #b86e00;
+  --warn-soft: #fff1d6;
+  --ok: #2b7a4b;
+  --ok-soft: #e1f3e8;
+  --info: #2b5ea8;
+  --info-soft: #e3ecf9;
+  --shadow: 0 1px 2px rgba(21, 35, 61, .06), 0 4px 14px rgba(21, 35, 61, .06);
+  --font-display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0e1623; --panel: #162030; --sunk: #111a28; --ink: #e5ebf3; --muted: #93a2b7; --line: #263449;
+    --accent: #f2b705; --accent-ink: #111a28; --chat: #101a28; --bubble-bot: #1b2739; --bubble-me: #1d3a2c;
+    --crit: #ef5b5b; --crit-soft: #3a1a1e; --warn: #f0a63a; --warn-soft: #36290f; --ok: #55b981; --ok-soft: #15301f;
+    --info: #74a3e8; --info-soft: #172a45; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.25);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #0e1623; --panel: #162030; --sunk: #111a28; --ink: #e5ebf3; --muted: #93a2b7; --line: #263449;
+  --accent: #f2b705; --accent-ink: #111a28; --chat: #101a28; --bubble-bot: #1b2739; --bubble-me: #1d3a2c;
+  --crit: #ef5b5b; --crit-soft: #3a1a1e; --warn: #f0a63a; --warn-soft: #36290f; --ok: #55b981; --ok-soft: #15301f;
+  --info: #74a3e8; --info-soft: #172a45; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.25);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--ground); color: var(--ink); font: 14px/1.45 var(--font-body); }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.app { display: flex; flex-direction: column; height: 100%; }
+.topbar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+}
+.brand { font-family: var(--font-display); font-weight: 700; font-size: 22px; letter-spacing: .04em; text-transform: uppercase; display: flex; align-items: center; gap: 8px; }
+.brand .mark { width: 22px; height: 22px; border-radius: 4px; background: repeating-linear-gradient(135deg, var(--accent) 0 6px, var(--ink) 6px 12px); }
+.brand small { font-family: var(--font-body); font-weight: 500; font-size: 12px; letter-spacing: 0; text-transform: none; color: var(--muted); }
+.topbar .spacer { flex: 1; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--line); white-space: nowrap; }
+.pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.pill.up { color: var(--ok); background: var(--ok-soft); border-color: transparent; }
+.pill.down { color: var(--crit); background: var(--crit-soft); border-color: transparent; }
+.pill.mode { color: var(--muted); }
+.pill.mode::before { display: none; }
+
+.tabs { display: none; gap: 4px; padding: 8px 16px 0; background: var(--panel); border-bottom: 1px solid var(--line); }
+.tabs button { flex: 1; border: 0; background: none; padding: 10px 6px; font-family: var(--font-display); font-weight: 600; font-size: 16px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); border-bottom: 3px solid transparent; cursor: pointer; position: relative; }
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.badge { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--crit); color: #fff; font: 600 11px/18px var(--font-body); margin-left: 4px; }
+
+.cols { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(320px, 380px) minmax(0, 1fr) minmax(330px, 400px); }
+.col { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+.col:last-child { border-right: 0; }
+.col-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 12px 16px 8px; }
+.eyebrow { font-family: var(--font-display); font-weight: 600; font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.scroll { overflow-y: auto; min-height: 0; flex: 1; }
+
+/* ---------- Gate phone ---------- */
+.gate { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 12px; position: relative; }
+.hubs { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
+.hubs button { border: 0; border-right: 1px solid var(--line); background: none; padding: 9px 2px; cursor: pointer; font-family: var(--font-display); font-weight: 600; font-size: 15px; letter-spacing: .03em; line-height: 1.1; }
+.hubs button:last-child { border-right: 0; }
+.hubs button small { display: block; font-family: var(--font-body); font-weight: 400; font-size: 10px; color: var(--muted); letter-spacing: 0; }
+.hubs button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.hubs button[aria-pressed="true"] small { color: var(--accent-ink); opacity: .8; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--shadow); }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field > span { font-size: 12px; color: var(--muted); font-weight: 500; }
+.input { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--sunk); }
+.input.mono { font-family: var(--font-mono); letter-spacing: .02em; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row > .grow { flex: 1; min-width: 0; }
+.btn { border: 1px solid var(--line); background: var(--panel); padding: 8px 12px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 13px; white-space: nowrap; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--ink); color: var(--panel); border-color: var(--ink); padding: 12px; font-size: 15px; }
+.btn.accent { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.danger { color: var(--crit); }
+.btn.small { padding: 4px 8px; font-size: 12px; font-weight: 500; }
+.btn:disabled { opacity: .5; cursor: default; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; cursor: pointer; background: var(--panel); user-select: none; }
+.chip input { margin: 0; accent-color: var(--ink); }
+.chip.mono { font-family: var(--font-mono); }
+.chip:has(input:checked) { border-color: var(--ink); background: var(--sunk); }
+.decision { display: grid; gap: 6px; }
+.decision label { display: flex; align-items: center; gap: 10px; padding: 10px; border: 2px solid var(--line); border-radius: 10px; cursor: pointer; font-weight: 600; }
+.decision input { accent-color: var(--ink); width: 18px; height: 18px; margin: 0; }
+.decision .cool:has(input:checked) { border-color: var(--warn); background: var(--warn-soft); }
+.decision .refuse:has(input:checked) { border-color: var(--crit); background: var(--crit-soft); }
+.decision .admit:has(input:checked) { border-color: var(--ok); background: var(--ok-soft); }
+.decision small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
+.precheck { border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+.precheck.ok { background: var(--ok-soft); color: var(--ok); }
+.precheck.warn { background: var(--crit-soft); color: var(--crit); font-weight: 600; }
+.precheck.note { background: var(--sunk); color: var(--muted); }
+.hint { font-size: 12px; color: var(--muted); margin: 0; }
+
+.screen { position: absolute; inset: 0 16px 16px; border-radius: 14px; display: flex; flex-direction: column; justify-content: center; gap: 14px; padding: 24px; text-align: center; color: #fff; z-index: 3; }
+.screen h3 { margin: 0; font-family: var(--font-display); font-size: 34px; line-height: 1.05; letter-spacing: .02em; text-transform: uppercase; text-wrap: balance; }
+.screen p { margin: 0; font-size: 15px; }
+.screen .meta { font: 12px var(--font-mono); opacity: .85; }
+.screen button { align-self: center; border: 2px solid rgba(255,255,255,.75); background: rgba(0,0,0,.2); color: #fff; padding: 10px 22px; border-radius: 10px; font-weight: 600; cursor: pointer; }
+.screen.critical { background: #b71c1c; }
+.screen.warning { background: #a35f00; }
+.screen.info { background: #1f4f96; }
+.screen.clear { background: #23683f; }
+@media (prefers-reduced-motion: no-preference) {
+  .screen.critical { animation: alarm .9s ease-in-out infinite alternate; }
+  @keyframes alarm { from { background: #a51616; } to { background: #dc2f2f; } }
+}
+
+/* ---------- WhatsApp group ---------- */
+.chat-col { background: var(--chat); }
+.chat-head { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.avatar { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--ink); color: var(--panel); font-family: var(--font-display); font-weight: 700; font-size: 15px; flex: none; }
+.chat-head strong { display: block; }
+.chat-head span { font-size: 12px; color: var(--muted); }
+.feed { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.day { align-self: center; font-size: 11px; color: var(--muted); background: var(--panel); padding: 2px 10px; border-radius: 6px; }
+.msg { max-width: min(560px, 92%); padding: 8px 10px 6px; border-radius: 10px; box-shadow: var(--shadow); white-space: pre-wrap; overflow-wrap: anywhere; position: relative; }
+.msg.bot { align-self: flex-start; background: var(--bubble-bot); border-top-left-radius: 2px; }
+.msg.me { align-self: flex-end; background: var(--bubble-me); border-top-right-radius: 2px; }
+.msg .who { display: block; font-size: 12px; font-weight: 600; color: var(--info); margin-bottom: 2px; white-space: normal; }
+.msg.me .who { color: var(--ok); }
+.msg .time { display: block; text-align: right; font-size: 11px; color: var(--muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
+.msg.critical { box-shadow: inset 4px 0 0 var(--crit), var(--shadow); }
+.msg.high { box-shadow: inset 4px 0 0 var(--warn), var(--shadow); }
+.msg .prio { display: inline-block; font: 600 10px/1 var(--font-body); letter-spacing: .08em; text-transform: uppercase; padding: 3px 6px; border-radius: 4px; margin-left: 6px; vertical-align: 1px; }
+.msg.critical .prio { background: var(--crit-soft); color: var(--crit); }
+.msg.high .prio { background: var(--warn-soft); color: var(--warn); }
+.msg a { color: var(--info); }
+.empty-feed { align-self: center; text-align: center; color: var(--muted); max-width: 340px; margin-top: 10vh; }
+.composer { padding: 10px 16px 12px; background: var(--panel); border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+.composer form { display: flex; gap: 8px; }
+.composer input { flex: 1; min-width: 0; padding: 10px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--sunk); }
+.composer .send { border-radius: 999px; padding: 10px 16px; }
+
+/* ---------- Control desk ---------- */
+.desk { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 14px; }
+.section-title { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin: 0 0 6px; }
+.section-title h2 { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 18px; letter-spacing: .04em; text-transform: uppercase; }
+.section-title span { font-size: 12px; color: var(--muted); }
+.checklist { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.checklist li { display: grid; grid-template-columns: 20px 1fr auto; gap: 8px; align-items: center; padding: 6px 4px; border-bottom: 1px dashed var(--line); }
+.checklist li:last-child { border-bottom: 0; }
+.checklist .tick { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; font-size: 11px; color: transparent; }
+.checklist li.done .tick { background: var(--ok); border-color: var(--ok); color: #fff; }
+.checklist li.done .label { color: var(--muted); }
+.checklist .label strong { display: block; font-weight: 600; color: var(--ink); }
+.checklist .label small { color: var(--muted); font-size: 12px; }
+.scenarios { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.scenarios .btn { text-align: left; white-space: normal; font-weight: 600; }
+.scenarios .btn small { display: block; font-weight: 400; color: var(--muted); font-size: 11px; }
+.scenarios .wide { grid-column: 1 / -1; }
+.switch { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-radius: 10px; background: var(--sunk); border: 1px solid var(--line); }
+.switch strong { display: block; }
+.switch small { color: var(--muted); font-size: 12px; }
+.toggle { position: relative; width: 50px; height: 28px; border-radius: 14px; border: 0; background: var(--ok); cursor: pointer; flex: none; }
+.toggle::after { content: ""; position: absolute; top: 3px; left: 25px; width: 22px; height: 22px; border-radius: 50%; background: #fff; transition: left .15s; }
+.toggle[aria-checked="false"] { background: var(--crit); }
+.toggle[aria-checked="false"]::after { left: 3px; }
+.logbox { font: 11px/1.5 var(--font-mono); background: var(--sunk); border: 1px solid var(--line); border-radius: 8px; padding: 8px; max-height: 120px; overflow: auto; white-space: pre; color: var(--muted); }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th { text-align: left; font-weight: 600; color: var(--muted); padding: 7px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.status { display: inline-block; padding: 2px 7px; border-radius: 4px; font-weight: 600; font-size: 11px; white-space: nowrap; }
+.status.cooling_off { background: var(--warn-soft); color: var(--warn); }
+.status.completely_refused { background: var(--crit-soft); color: var(--crit); }
+.status.admitted { background: var(--ok-soft); color: var(--ok); }
+.breach { color: var(--crit); font-weight: 600; }
+.events { list-style: none; margin: 0; padding: 0; font-size: 12px; display: grid; gap: 4px; }
+.events li { display: grid; grid-template-columns: 44px 1fr; gap: 8px; }
+.events time { font-family: var(--font-mono); color: var(--muted); }
+.events .b { color: var(--crit); font-weight: 600; }
+.muted { color: var(--muted); }
+
+.boot { position: fixed; inset: 0; display: grid; place-items: center; background: var(--ground); z-index: 20; padding: 24px; }
+.boot div { max-width: 460px; text-align: center; display: flex; flex-direction: column; gap: 10px; }
+.boot h1 { margin: 0; font-family: var(--font-display); font-size: 30px; text-transform: uppercase; letter-spacing: .04em; }
+.boot p { margin: 0; color: var(--muted); }
+.boot code { font-family: var(--font-mono); background: var(--panel); padding: 2px 6px; border-radius: 4px; }
+.spinner { width: 34px; height: 34px; border-radius: 50%; border: 4px solid var(--line); border-top-color: var(--accent); align-self: center; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 1100px) {
+  .cols { grid-template-columns: minmax(300px, 360px) minmax(0, 1fr); }
+  .col.desk-col { display: none; }
+  .tabs { display: flex; }
+  .cols[data-tab="desk"] .col.desk-col { display: flex; grid-column: 1 / -1; }
+  .cols[data-tab="desk"] .col:not(.desk-col) { display: none; }
+}
+@media (max-width: 760px) {
+  .cols { grid-template-columns: minmax(0, 1fr); }
+  .cols .col { display: none; border-right: 0; }
+  .cols[data-tab="gate"] .gate-col, .cols[data-tab="chat"] .chat-col, .cols[data-tab="desk"] .desk-col { display: flex; }
+  .topbar .mode, .brand small { display: none; }
+}
+</style>
+
+<div class="boot" id="boot">
+  <div>
+    <div class="spinner" id="bootSpin"></div>
+    <h1>Gatekeeper</h1>
+    <p id="bootMsg">Starting the database…</p>
+  </div>
+</div>
+
+<div class="app">
+  <header class="topbar">
+    <div class="brand"><span class="mark" aria-hidden="true"></span>Gatekeeper <small>Proactive Entry Sync Engine</small></div>
+    <div class="spacer"></div>
+    <span class="pill mode" id="modePill">Demo</span>
+    <span class="pill up" id="dbPill">Database online</span>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="gate" aria-selected="true">Gate phone</button>
+    <button role="tab" data-tab="chat" aria-selected="false">Group chat <span class="badge" id="unread" hidden>0</span></button>
+    <button role="tab" data-tab="desk" aria-selected="false">Control desk</button>
+  </nav>
+
+  <div class="cols" id="cols" data-tab="gate">
+    <!-- ================= GATE PHONE ================= -->
+    <section class="col gate-col" aria-label="Steward gate phone">
+      <div class="col-head"><span class="eyebrow">Steward phone</span><span class="hint" id="stewardHint"></span></div>
+      <div class="scroll">
+        <div class="gate">
+          <div class="hubs" role="group" aria-label="Screening hub">
+            <button data-hub="East Hub" aria-pressed="false">East<small>Gate A</small></button>
+            <button data-hub="West Hub" aria-pressed="true">West<small>Gate D</small></button>
+            <button data-hub="South Hub" aria-pressed="false">South<small>Gate G</small></button>
+            <button data-hub="Hospitality Hub" aria-pressed="false">Hosp.<small>Suites</small></button>
+          </div>
+
+          <form id="scanForm" class="card" novalidate>
+            <label class="field"><span>Steward on this gate</span>
+              <input class="input" id="steward" maxlength="100" autocomplete="off">
+            </label>
+            <div class="field">
+              <span>Ticket ID (from the QR code)</span>
+              <div class="row">
+                <input class="input mono grow" id="ticket" maxlength="64" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="TM-847294-X">
+                <button type="button" class="btn" id="newTicket">New patron</button>
+              </div>
+              <div class="chips" id="recent" aria-label="Recently scanned tickets"></div>
+            </div>
+            <div class="precheck note" id="precheck">Enter or pick a ticket to check its history.</div>
+
+            <div class="decision" role="radiogroup" aria-label="Decision">
+              <label class="cool"><input type="radio" name="action" value="cool_off" id="actCool"><span>Sent away<small>30 minute cool-down</small></span></label>
+              <label class="refuse"><input type="radio" name="action" value="refused" id="actRefuse"><span>Completely refused<small>Not admitted tonight</small></span></label>
+              <label class="admit"><input type="radio" name="action" value="admitted" id="actAdmit"><span>Admitted<small>Let through the turnstile</small></span></label>
+            </div>
+
+            <label class="field"><span>Description</span>
+              <input class="input" id="desc" maxlength="2000">
+            </label>
+            <div class="field"><span>Indicators</span><div class="chips" id="indicators"></div></div>
+            <div class="row">
+              <label class="field grow"><span>Party size</span><input class="input" id="party" type="number" min="1" max="500" value="1" inputmode="numeric"></label>
+              <label class="field grow"><span>Notes</span><input class="input" id="notes" maxlength="2000" placeholder="Optional"></label>
+            </div>
+            <button class="btn primary" type="submit" id="submitBtn">Submit &amp; alert supervisors</button>
+            <p class="hint">The real steward form reads the QR code with the phone camera and attaches GPS. Here you type or pick the ticket ID instead.</p>
+          </form>
+
+          <div class="screen" id="screen" hidden role="alertdialog" aria-live="assertive">
+            <h3 id="screenTitle"></h3>
+            <p id="screenMsg"></p>
+            <div class="meta" id="screenMeta"></div>
+            <button type="button" id="screenClose">Acknowledge</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= WHATSAPP GROUP ================= -->
+    <section class="col chat-col" aria-label="Supervisors WhatsApp group">
+      <div class="chat-head">
+        <div class="avatar" aria-hidden="true">GC</div>
+        <div><strong>Gate Control — Supervisors</strong><span>Gatekeeper Bot, Head of Security, 6 hub supervisors</span></div>
+      </div>
+      <div class="scroll" id="feedScroll">
+        <div class="feed" id="feed">
+          <div class="day">Today</div>
+          <div class="empty-feed" id="emptyFeed">Alerts from the gates appear here. Submit a scan, or run a scenario from the control desk, then type <strong>Check</strong> and a ticket ID to ask the bot.</div>
+        </div>
+      </div>
+      <div class="composer">
+        <div class="chips" id="suggest"></div>
+        <form id="chatForm">
+          <label for="chatInput" class="eyebrow" hidden>Message the group</label>
+          <input id="chatInput" autocomplete="off" placeholder="Message as Head of Security… e.g. Check TM-847294-X">
+          <button class="btn accent send" type="submit">Send</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- ================= CONTROL DESK ================= -->
+    <section class="col desk-col" aria-label="Control desk">
+      <div class="col-head"><span class="eyebrow">Control desk</span><span class="hint" id="clock"></span></div>
+      <div class="scroll">
+        <div class="desk">
+          <div>
+            <div class="section-title"><h2>Test checklist</h2><span id="progress">0 / 8</span></div>
+            <ul class="checklist" id="checklist"></ul>
+          </div>
+
+          <div>
+            <div class="section-title"><h2>Run a scenario</h2><span>Plays out on the gate phone</span></div>
+            <div class="scenarios">
+              <button class="btn" data-scenario="hop">Hub hopper<small>Cool-off at West, tries South</small></button>
+              <button class="btn" data-scenario="breach">Bad admission<small>Refused at East, let in at Hospitality</small></button>
+              <button class="btn" data-scenario="served">Cool-off served<small>30 min pass, re-admitted</small></button>
+              <button class="btn" data-scenario="outage">Database outage<small>Buffer offline, then re-sync</small></button>
+              <button class="btn" data-scenario="bot">Ask the bot<small>Check a ticket + an unknown one</small></button>
+              <button class="btn accent" data-scenario="all">Run all<small>Ticks the whole checklist</small></button>
+            </div>
+          </div>
+
+          <div>
+            <div class="section-title"><h2>Database</h2><span id="backlog">Offline log empty</span></div>
+            <div class="switch">
+              <div><strong id="dbLabel">PostgreSQL online</strong><small>Switch off to simulate losing the cloud database mid-event</small></div>
+              <button class="toggle" id="dbToggle" role="switch" aria-checked="true" aria-label="Database connection"></button>
+            </div>
+            <div class="logbox" id="offlineLog" hidden></div>
+          </div>
+
+          <div>
+            <div class="section-title"><h2>Tickets</h2><span id="ticketCount">0 on record</span></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Ticket</th><th>Status</th><th>Cool-off</th><th>Scans</th><th></th></tr></thead>
+                <tbody id="tickets"><tr><td colspan="5" class="muted">No incidents yet.</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div>
+            <div class="section-title"><h2>Scan events</h2><span>Newest first</span></div>
+            <ul class="events" id="events"><li class="muted">Nothing logged yet.</li></ul>
+          </div>
+
+          <div class="row">
+            <button class="btn danger" id="resetBtn">Reset demo data</button>
+            <button class="btn" id="resetConfirm" hidden>Yes, wipe everything</button>
+            <button class="btn" id="resetCancel" hidden>Keep</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const TZ = 'Europe/London';
+  const STEWARDS = { 'East Hub': 'Steward Priya', 'West Hub': 'Supervisor Dave', 'South Hub': 'Steward Sarah', 'Hospitality Hub': 'Steward John' };
+  const INDICATORS = ['Slurred speech', 'Stumbling', 'Smell of alcohol', 'Aggressive', 'Glazed eyes', 'Vomiting', 'Suspected drugs'];
+  const DESCRIPTIONS = [
+    'Male, 6ft, neon green bucket hat, black puffer jacket',
+    'Female, red hair, white trainers, denim jacket',
+    'Male, shaved head, Celtic away shirt, grey joggers',
+    'Group of three, matching orange hen-party sashes',
+    'Male, glasses, navy rain jacket, carrying a flag',
+  ];
+
+  // ---------------------------------------------------------------- transport
+  // Server mode talks HTTP to the real Express endpoints; browser mode calls the
+  // same modules bundled with in-browser PostgreSQL (window.gatekeeperReady).
+  function serverTransport() {
+    const json = async (res) => ({ status: res.status, body: await res.json().catch(() => ({})) });
+    return {
+      label: 'Local server · mock WhatsApp',
+      scan: (body) => fetch('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(json),
+      lookup: (id) => fetch('/api/tickets/' + encodeURIComponent(id)).then(json),
+      chat: (text) => fetch('/demo/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) }).then((r) => r.json()),
+      setOutage: (down) => fetch('/demo/api/outage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ down }) }),
+      timeTravel: (ticket_id, minutes) => fetch('/demo/api/time-travel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticket_id, minutes }) }),
+      reset: () => fetch('/demo/api/reset', { method: 'POST' }),
+      state: () => fetch('/demo/api/state').then((r) => r.json()),
+      subscribe(onMsg) {
+        const es = new EventSource('/demo/api/feed');
+        es.onmessage = (e) => onMsg(JSON.parse(e.data));
+      },
+    };
+  }
+  function browserTransport(engine) {
+    return {
+      label: 'Runs in your browser · PostgreSQL (PGlite)',
+      scan: (b) => engine.scan(b),
+      lookup: (id) => engine.lookup(id),
+      chat: (t) => engine.chat(t),
+      setOutage: (d) => engine.setOutage(d),
+      timeTravel: (id, m) => engine.timeTravel(id, m),
+      reset: () => engine.reset(),
+      state: () => engine.state(),
+      subscribe(onMsg) { engine.messages().forEach(onMsg); engine.onMessage(onMsg); },
+    };
+  }
+
+  let api = null;
+
+  // ---------------------------------------------------------------- formatting
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const clock = (d) => new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: TZ }).format(new Date(d));
+  /** WhatsApp formatting: *bold*, _italic_, URLs. Input is escaped first. */
+  function waFormat(text) {
+    return esc(text)
+      .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>')
+      .replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<strong>$2</strong>')
+      .replace(/(^|[\s(])_([^_\n]+)_/g, '$1<em>$2</em>');
+  }
+  const STATUS_TEXT = { cooling_off: 'Cooling off', completely_refused: 'Refused', admitted: 'Admitted' };
+  const ACTION_TEXT = {
+    initial_cool_off: 'cool-off applied', initial_refusal: 'entry refused', bypass_attempt: 'BYPASS ATTEMPT blocked',
+    unauthorized_admission: 'UNAUTHORIZED ADMISSION', cleared_admission: 'admitted after cool-off', repeat_scan: 're-scanned',
+  };
+
+  // ---------------------------------------------------------------- checklist
+  const CHECKS = [
+    ['a', 'New incident logged', 'Scenario A: cool-off or refusal saved and posted to the group'],
+    ['b', 'Hub hopper intercepted', 'Scenario B: same ticket at another hub, steward blocked, high alert'],
+    ['c', 'Unauthorized admission caught', 'Scenario C: flagged ticket admitted, critical alert names the steward'],
+    ['served', 'Cool-off served correctly', 'Admitted after 30 min is logged as normal, not a breach'],
+    ['bot', 'Bot answered "Check"', 'Ticket profile with scan history posted back to the group'],
+    ['nf', 'Bot handled an unknown ticket', '"No Database Record" reply'],
+    ['buffer', 'Outage buffered offline', 'Scan written to offline_incidents.log while the database was down'],
+    ['resync', 'Offline log re-synced', 'Replayed into PostgreSQL with a "Delayed sync" alert'],
+  ];
+  const done = new Set();
+  function tick(key) {
+    if (done.has(key)) return;
+    done.add(key);
+    renderChecklist();
+  }
+  function renderChecklist() {
+    $('checklist').innerHTML = CHECKS.map(([k, t, d]) =>
+      `<li class="${done.has(k) ? 'done' : ''}"><span class="tick" aria-hidden="true">✓</span><span class="label"><strong>${esc(t)}</strong><small>${esc(d)}</small></span><span class="muted">${done.has(k) ? 'Passed' : ''}</span></li>`).join('');
+    $('progress').textContent = `${done.size} / ${CHECKS.length}`;
+  }
+
+  // ---------------------------------------------------------------- gate phone
+  let hub = 'West Hub';
+  const stewardByHub = { ...STEWARDS };
+  const recent = [];
+
+  function setHub(h) {
+    stewardByHub[hub] = $('steward').value.trim() || STEWARDS[hub];
+    hub = h;
+    document.querySelectorAll('.hubs button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.hub === h)));
+    $('steward').value = stewardByHub[h];
+    $('stewardHint').textContent = h;
+    precheck();
+  }
+  document.querySelectorAll('.hubs button').forEach((b) => b.addEventListener('click', () => setHub(b.dataset.hub)));
+
+  for (const name of INDICATORS) {
+    const l = document.createElement('label');
+    l.className = 'chip';
+    l.innerHTML = `<input type="checkbox" value="${esc(name)}"> ${esc(name)}`;
+    $('indicators').append(l);
+  }
+
+  function randomTicket() {
+    return `TM-${Math.floor(100000 + Math.random() * 900000)}-${'ABCDEFGHJKLMNPQRSTUVWXYZ'[Math.floor(Math.random() * 24)]}`;
+  }
+  function freshPatron() {
+    $('ticket').value = randomTicket();
+    $('desc').value = DESCRIPTIONS[Math.floor(Math.random() * DESCRIPTIONS.length)];
+    $('party').value = 1 + Math.floor(Math.random() * 4);
+    document.querySelectorAll('#indicators input').forEach((c, i) => (c.checked = i < 2));
+    document.querySelectorAll('input[name=action]').forEach((r) => (r.checked = false));
+    $('notes').value = '';
+    precheck();
+  }
+  $('newTicket').addEventListener('click', freshPatron);
+
+  function rememberTicket(id) {
+    const i = recent.indexOf(id);
+    if (i >= 0) recent.splice(i, 1);
+    recent.unshift(id);
+    recent.length = Math.min(recent.length, 5);
+    $('recent').innerHTML = recent.map((t) => `<button type="button" class="chip mono" data-t="${esc(t)}">${esc(t)}</button>`).join('');
+    renderSuggestions();
+  }
+  $('recent').addEventListener('click', (e) => {
+    const t = e.target.closest('[data-t]');
+    if (!t) return;
+    $('ticket').value = t.dataset.t;
+    precheck();
+  });
+
+  let precheckSeq = 0;
+  async function precheck() {
+    const id = $('ticket').value.trim();
+    const box = $('precheck');
+    const seq = ++precheckSeq;
+    if (!id) { box.className = 'precheck note'; box.textContent = 'Enter or pick a ticket to check its history.'; return; }
+    try {
+      const { status, body } = await api.lookup(id);
+      if (seq !== precheckSeq) return;
+      if (status === 503) { box.className = 'precheck note'; box.textContent = 'Database offline: history check unavailable. Treat with caution.'; return; }
+      if (!body.found) { box.className = 'precheck ok'; box.textContent = 'No incident on record for this ticket.'; return; }
+      if (body.flagged) {
+        const other = body.origin_hub && body.origin_hub !== hub;
+        const left = body.mins_left ? ` · ${body.mins_left} min cool-off left` : '';
+        box.className = 'precheck warn';
+        box.textContent = `⛔ ${STATUS_TEXT[body.ticket.current_status]} at ${body.origin_hub}${left}. ${body.ticket.description}${other ? ' · POSSIBLE HUB HOPPER' : ''}`;
+      } else {
+        box.className = 'precheck note';
+        box.textContent = `Previously admitted · ${body.ticket.events.length} scan(s) on record.`;
+      }
+    } catch { box.className = 'precheck note'; box.textContent = 'Could not check history.'; }
+  }
+  let typingTimer;
+  $('ticket').addEventListener('input', () => { clearTimeout(typingTimer); typingTimer = setTimeout(precheck, 300); });
+
+  function readForm() {
+    const action = document.querySelector('input[name=action]:checked');
+    return {
+      ticket_id: $('ticket').value.trim(),
+      hub_location: hub,
+      steward_name: $('steward').value.trim(),
+      action_logged: action ? action.value : undefined,
+      party_size: Number($('party').value) || 1,
+      description: $('desc').value.trim() || undefined,
+      indicators: [...document.querySelectorAll('#indicators input:checked')].map((c) => c.value),
+      reasoning: $('notes').value.trim() || undefined,
+      occurred_at: new Date().toISOString(),
+    };
+  }
+
+  function showScreen(screen, meta) {
+    $('screen').className = `screen ${screen.level}`;
+    $('screenTitle').textContent = screen.headline;
+    $('screenMsg').textContent = screen.message;
+    $('screenMeta').textContent = meta || '';
+    $('screen').hidden = false;
+  }
+  function hideScreen() { $('screen').hidden = true; }
+  $('screenClose').addEventListener('click', hideScreen);
+
+  async function submitScan(payload) {
+    $('submitBtn').disabled = true;
+    try {
+      const { status, body } = await api.scan(payload);
+      if (status === 400) {
+        showScreen({ level: 'warning', headline: 'Check the form', message: (body.details || []).map((d) => `${d.field}: ${d.message}`).join(' · ') });
+        return body;
+      }
+      if (body.buffered) tick('buffer');
+      const sc = body.scenario;
+      if (sc === 'NEW_INCIDENT') tick('a');
+      if (sc === 'HUB_HOP_BYPASS') tick('b');
+      if (sc === 'UNAUTHORIZED_ADMISSION') tick('c');
+      if (sc === 'CLEARED_ADMISSION') tick('served');
+      showScreen(body.screen || { level: 'warning', headline: 'Error', message: body.error || 'Unknown error' },
+        body.buffered ? `HTTP ${status} · saved to offline_incidents.log` : `HTTP ${status} · ${sc || ''}${body.is_breach ? ' · breach event logged' : ''}`);
+      if (payload.ticket_id) rememberTicket(payload.ticket_id);
+      refresh();
+      return body;
+    } finally {
+      $('submitBtn').disabled = false;
+    }
+  }
+
+  $('scanForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const p = readForm();
+    if (!p.ticket_id) { showScreen({ level: 'warning', headline: 'No ticket', message: 'Enter a ticket ID or tap "New patron".' }); return; }
+    if (!p.action_logged) { showScreen({ level: 'warning', headline: 'Pick a decision', message: 'Choose sent away, refused or admitted.' }); return; }
+    submitScan(p);
+  });
+
+  // ---------------------------------------------------------------- chat
+  let unread = 0;
+  let activeTab = 'gate';
+  function addBubble(kind, text, time, priority) {
+    $('emptyFeed')?.remove();
+    const div = document.createElement('div');
+    const prio = priority === 'critical' || priority === 'high' ? priority : '';
+    div.className = `msg ${kind} ${prio}`;
+    const who = kind === 'bot' ? 'Gatekeeper Bot' : 'Head of Security';
+    const tag = prio ? `<span class="prio">${prio === 'critical' ? 'Critical' : 'High priority'}</span>` : '';
+    div.innerHTML = `<span class="who">${who}${tag}</span>${waFormat(text)}<span class="time">${clock(time)}</span>`;
+    $('feed').append(div);
+    const sc = $('feedScroll');
+    sc.scrollTop = sc.scrollHeight;
+    if (activeTab !== 'chat' && window.matchMedia('(max-width: 760px)').matches) {
+      unread++;
+      $('unread').textContent = unread;
+      $('unread').hidden = false;
+    }
+  }
+  function onBotMessage(m) {
+    const body = m.text.body;
+    addBubble('bot', body, m.sent_at, m.priority);
+    if (body.includes('TICKET PROFILE RETRIEVED')) tick('bot');
+    if (body.includes('No Database Record Extracted')) tick('nf');
+    if (body.includes('DELAYED SYNC')) tick('resync');
+  }
+  async function sendChat(text) {
+    if (!text.trim()) return;
+    addBubble('me', text, new Date());
+    await api.chat(text);
+  }
+  $('chatForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const t = $('chatInput').value;
+    $('chatInput').value = '';
+    sendChat(t);
+  });
+  function renderSuggestions() {
+    const items = [...recent.slice(0, 2).map((t) => `Check ${t}`), 'Check TM-000000-Z', 'Help'];
+    $('suggest').innerHTML = items.map((s) => `<button type="button" class="chip" data-s="${esc(s)}">${esc(s)}</button>`).join('');
+  }
+  $('suggest').addEventListener('click', (e) => { const b = e.target.closest('[data-s]'); if (b) sendChat(b.dataset.s); });
+
+  // ---------------------------------------------------------------- tabs
+  document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => {
+    activeTab = b.dataset.tab;
+    $('cols').dataset.tab = activeTab;
+    document.querySelectorAll('.tabs button').forEach((x) => x.setAttribute('aria-selected', String(x === b)));
+    if (activeTab === 'chat') { unread = 0; $('unread').hidden = true; const sc = $('feedScroll'); sc.scrollTop = sc.scrollHeight; }
+  }));
+
+  // ---------------------------------------------------------------- desk
+  let dbUp = true;
+  let clockOffset = 0; // db time - browser time
+  let lastState = null;
+
+  async function setDb(up) {
+    dbUp = up;
+    await api.setOutage(!up);
+    await refresh();
+    precheck();
+  }
+  $('dbToggle').addEventListener('click', () => setDb(!dbUp));
+
+  function renderDb(state) {
+    const up = state.database === 'up';
+    dbUp = up;
+    $('dbToggle').setAttribute('aria-checked', String(up));
+    $('dbLabel').textContent = up ? 'PostgreSQL online' : 'PostgreSQL OFFLINE';
+    $('dbPill').className = `pill ${up ? 'up' : 'down'}`;
+    $('dbPill').textContent = up ? 'Database online' : 'Database offline';
+    const n = state.offline_log.length;
+    $('backlog').textContent = n ? `${n} buffered in offline_incidents.log` : 'Offline log empty';
+    $('offlineLog').hidden = !n;
+    $('offlineLog').textContent = state.offline_log.join('\n');
+  }
+
+  function coolLeft(t) {
+    if (t.current_status !== 'cooling_off' || !t.cool_down_until) return '—';
+    const ms = new Date(t.cool_down_until).getTime() - (Date.now() + clockOffset);
+    if (ms <= 0) return 'Expired';
+    const m = Math.floor(ms / 60000), s = Math.floor((ms % 60000) / 1000);
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+
+  function renderTables(state) {
+    if (state.database !== 'up') {
+      $('tickets').innerHTML = '<tr><td colspan="5" class="muted">Database unreachable. New scans are going to the offline log.</td></tr>';
+      return;
+    }
+    if (state.db_now) clockOffset = new Date(state.db_now).getTime() - Date.now();
+    $('ticketCount').textContent = `${state.tickets.length} on record`;
+    $('tickets').innerHTML = state.tickets.length ? state.tickets.map((t) => `
+      <tr>
+        <td class="mono">${esc(t.ticket_id)}<br><span class="muted">${esc(t.last_hub || '')}</span></td>
+        <td><span class="status ${esc(t.current_status)}">${STATUS_TEXT[t.current_status] || esc(t.current_status)}</span></td>
+        <td class="mono" data-cool="${esc(t.ticket_id)}">${coolLeft(t)}</td>
+        <td class="mono">${t.scans}${t.breaches ? ` <span class="breach">· ${t.breaches} breach</span>` : ''}</td>
+        <td>${t.current_status === 'cooling_off' && coolLeft(t) !== 'Expired' ? `<button class="btn small" data-skip="${esc(t.ticket_id)}" title="Pretend 30 minutes have passed">Skip 30 min</button>` : ''}</td>
+      </tr>`).join('') : '<tr><td colspan="5" class="muted">No incidents yet.</td></tr>';
+    $('events').innerHTML = state.events.length ? state.events.map((e) => `
+      <li><time>${clock(e.timestamp)}</time><span><span class="mono">${esc(e.ticket_id)}</span> · ${esc(e.hub_location)} · <span class="${e.is_breach_event ? 'b' : ''}">${ACTION_TEXT[e.action_logged] || esc(e.action_logged)}</span> · ${esc(e.steward_name)}</span></li>`).join('') : '<li class="muted">Nothing logged yet.</li>';
+  }
+  $('tickets').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-skip]');
+    if (!b) return;
+    await api.timeTravel(b.dataset.skip, 30);
+    await refresh();
+    precheck();
+  });
+
+  async function refresh() {
+    try {
+      const state = await api.state();
+      lastState = state;
+      renderDb(state);
+      renderTables(state);
+    } catch (err) { console.error(err); }
+  }
+  setInterval(() => {
+    $('clock').textContent = clock(Date.now() + clockOffset) + ' ' + TZ.split('/')[1];
+    if (lastState) document.querySelectorAll('[data-cool]').forEach((td) => {
+      const t = lastState.tickets.find((x) => x.ticket_id === td.dataset.cool);
+      if (t) td.textContent = coolLeft(t);
+    });
+  }, 1000);
+
+  $('resetBtn').addEventListener('click', () => { $('resetConfirm').hidden = false; $('resetCancel').hidden = false; $('resetBtn').hidden = true; });
+  $('resetCancel').addEventListener('click', () => { $('resetConfirm').hidden = true; $('resetCancel').hidden = true; $('resetBtn').hidden = false; });
+  $('resetConfirm').addEventListener('click', async () => {
+    await api.reset();
+    done.clear(); renderChecklist();
+    recent.length = 0; $('recent').innerHTML = ''; renderSuggestions();
+    $('feed').innerHTML = '<div class="day">Today</div>';
+    $('resetCancel').click();
+    hideScreen();
+    freshPatron();
+    refresh();
+  });
+
+  // ---------------------------------------------------------------- scenarios
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  let running = false;
+
+  async function gateScan(h, action, opts = {}) {
+    setHub(h);
+    if (opts.ticket) $('ticket').value = opts.ticket;
+    if (opts.desc) $('desc').value = opts.desc;
+    if (opts.party) $('party').value = opts.party;
+    if (opts.steward) $('steward').value = opts.steward;
+    document.querySelector(`input[name=action][value=${action}]`).checked = true;
+    await precheck();
+    await wait(700);
+    const body = await submitScan(readForm());
+    await wait(1600);
+    hideScreen();
+    return body;
+  }
+
+  const SCENARIOS = {
+    async hop() {
+      freshPatron();
+      const t = $('ticket').value;
+      await gateScan('West Hub', 'cool_off', { desc: 'Male, 6ft, neon green bucket hat, black puffer jacket', party: 4 });
+      await gateScan('South Hub', 'cool_off', { ticket: t });
+      await gateScan('Hospitality Hub', 'cool_off', { ticket: t });
+      return t;
+    },
+    async breach() {
+      freshPatron();
+      const t = $('ticket').value;
+      await gateScan('East Hub', 'refused', {});
+      await gateScan('Hospitality Hub', 'admitted', { ticket: t, steward: 'Line Steward Kevin' });
+      return t;
+    },
+    async served() {
+      freshPatron();
+      const t = $('ticket').value;
+      await gateScan('West Hub', 'cool_off', {});
+      await api.timeTravel(t, 31);
+      await refresh();
+      await wait(600);
+      await gateScan('West Hub', 'admitted', { ticket: t });
+      return t;
+    },
+    async outage() {
+      await setDb(false);
+      await wait(800);
+      freshPatron();
+      const t = $('ticket').value;
+      await gateScan('South Hub', 'refused', {});
+      await wait(1200);
+      await setDb(true);
+      return t;
+    },
+    async bot() {
+      const t = recent[0] || (await SCENARIOS.hop());
+      await sendChat(`Check ${t}`);
+      await wait(900);
+      await sendChat('Check TM-000000-Z');
+    },
+    async all() {
+      const t = await SCENARIOS.hop();
+      await SCENARIOS.breach();
+      await SCENARIOS.served();
+      await SCENARIOS.outage();
+      await sendChat(`Check ${t}`);
+      await wait(900);
+      await sendChat('Check TM-000000-Z');
+    },
+  };
+  document.querySelectorAll('[data-scenario]').forEach((b) => b.addEventListener('click', async () => {
+    if (running) return;
+    running = true;
+    document.querySelectorAll('[data-scenario]').forEach((x) => (x.disabled = true));
+    // On phones, jump to the gate so the run is visible.
+    if (window.matchMedia('(max-width: 1100px)').matches) document.querySelector('.tabs button[data-tab="gate"]')?.click();
+    try { await SCENARIOS[b.dataset.scenario](); } catch (err) { console.error(err); }
+    finally {
+      running = false;
+      document.querySelectorAll('[data-scenario]').forEach((x) => (x.disabled = false));
+    }
+  }));
+
+  // ---------------------------------------------------------------- boot
+  async function boot() {
+    try {
+      if (window.GK_MODE === 'server') {
+        api = serverTransport();
+      } else {
+        $('bootMsg').textContent = 'Starting PostgreSQL in your browser… (first load downloads about 6 MB)';
+        api = browserTransport(await window.gatekeeperReady);
+      }
+      $('modePill').textContent = api.label;
+      renderChecklist();
+      renderSuggestions();
+      $('steward').value = stewardByHub[hub];
+      $('stewardHint').textContent = hub;
+      api.subscribe(onBotMessage);
+      freshPatron();
+      await refresh();
+      $('boot').hidden = true;
+    } catch (err) {
+      console.error(err);
+      $('bootSpin').hidden = true;
+      $('bootMsg').innerHTML = `The in-browser database could not start (${esc(err && err.message || err)}).<br><br>Run the same demo locally instead:<br><code>cd incident-tracker &amp;&amp; npm install &amp;&amp; npm run demo</code>`;
+    }
+  }
+  boot();
+})();
+</script>

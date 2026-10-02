@@ -1,5 +1,6 @@
 import path from 'path';
 import fs from 'fs';
+import { getConfig } from '../config/env';
 import { getPool, isConnectivityError } from '../db/pool';
 import { offlineLogPath, readOfflineIncidents, type OfflineEntry } from './offlineBuffer';
 import { runScanPipeline } from './scanPipeline';
@@ -110,7 +111,7 @@ export async function resyncOfflineIncidents(opts: { sendAlerts?: boolean } = {}
  * Background watchdog: every `intervalMs`, if the offline log has entries and the
  * database answers, replay it. This is the "sync back the moment connectivity is restored" loop.
  */
-export function startOfflineSyncWatchdog(intervalMs = 15_000): () => void {
+export function startOfflineSyncWatchdog(intervalMs = getConfig().OFFLINE_SYNC_INTERVAL_MS): () => void {
   const tick = async () => {
     try {
       const live = offlineLogPath();
@@ -127,7 +128,7 @@ export function startOfflineSyncWatchdog(intervalMs = 15_000): () => void {
     }
   };
   const handle = setInterval(tick, intervalMs);
-  handle.unref();
+  (handle as { unref?: () => void }).unref?.();
   void tick();
   return () => clearInterval(handle);
 }

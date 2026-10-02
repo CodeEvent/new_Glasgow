@@ -27,6 +27,36 @@ With `MOCK_WHATSAPP_API=true`, every outgoing group message is printed to the se
 
 Production: `npm run build && npm start`.
 
+## Try it: the demo
+
+### One command, nothing else to install
+
+```bash
+cd incident-tracker
+npm install
+npm run demo
+```
+
+Then open **http://localhost:3000/demo**. This runs the real Express server with an embedded PostgreSQL (PGlite) and mock WhatsApp. It never reads `.env`, so it can't touch a real database or send real messages. The real steward form is at `http://localhost:3000/` on the same data.
+
+The control room has three panes:
+
+- **Steward phone.** Pick a hub, type or pick a ticket, choose *Sent away / Refused / Admitted*, submit. The phone shows the same block screens a steward would see.
+- **Gate Control group chat.** Every alert the engine sends to WhatsApp appears here. Type `Check <ticket>` or `Help` as the Head of Security; the message goes through the real `/api/whatsapp/incoming` webhook.
+- **Control desk:**
+  - a test checklist that ticks itself as each behaviour is seen;
+  - one-click scenarios (hub hopper, bad admission, cool-off served, database outage, ask the bot, run all);
+  - a database on/off switch for the offline buffer;
+  - a live ticket table with cool-off countdowns and **Skip 30 min**, so you don't have to wait out a cool-off.
+
+**Run all** exercises every rule and should end at 8 / 8.
+
+Options: `PORT=4000 npm run demo`, or `DEMO_DATA_DIR=./demo-data/pg npm run demo` to keep data between runs.
+
+### Hosted in-browser build
+
+`npm run demo:web` bundles the same engine modules for the browser into `dist-web/`, running on PostgreSQL compiled to WebAssembly. `npm run demo:web:serve` previews it locally under a strict CSP. `npm run demo:smoke` checks the embedded engine headlessly.
+
 ## Scan rules (`POST /api/scan`)
 
 Payload:

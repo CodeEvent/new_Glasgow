@@ -5,7 +5,8 @@ import { hasPendingOfflineIncidents } from './services/offlineBuffer';
 import { scanRouter } from './routes/scan';
 import { whatsappWebhookRouter } from './routes/whatsappWebhook';
 
-export function createApp() {
+/** `extend` mounts extra routes (e.g. the demo console) ahead of the static files and 404 handler. */
+export function createApp(opts: { extend?: (app: express.Express) => void } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', true);
@@ -42,6 +43,8 @@ export function createApp() {
 
   app.use('/api', scanRouter);
   app.use('/api/whatsapp', whatsappWebhookRouter);
+
+  opts.extend?.(app);
 
   // Steward intake form (mobile web app).
   app.use(express.static(path.resolve(__dirname, '..', 'public'), { maxAge: '5m' }));

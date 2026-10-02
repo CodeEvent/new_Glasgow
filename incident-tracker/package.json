@@ -12,7 +12,11 @@
     "migrate:down": "tsx src/db/migrate.ts down",
     "resync": "tsx src/scripts/resyncOffline.ts",
     "simulate": "tsx src/scripts/simulate.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "demo": "tsx src/demo/server.ts",
+    "demo:smoke": "tsx src/demo/smoke.ts",
+    "demo:web": "node demo/build-web.mjs",
+    "demo:web:serve": "node demo/serve-web.mjs"
   },
   "license": "UNLICENSED",
   "dependencies": {
@@ -23,10 +27,12 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.4",
     "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
+    "esbuild": "^0.28.2",
     "supertest": "^7.3.1",
     "tsx": "^4.23.15",
     "typescript": "~5.9",
