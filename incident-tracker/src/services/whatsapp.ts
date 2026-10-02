@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import axios, { AxiosError } from 'axios';
-import { getConfig } from '../config/env';
+import { cloudApiEnabled, getConfig } from '../config/env';
 
 export type MessagePriority = 'standard' | 'high' | 'critical';
 
@@ -60,6 +60,7 @@ export function graphMessagesUrl(): string {
 /** Everyone an alert goes to: the group (if configured) plus each supervisor number. */
 export function alertRecipients(): string[] {
   const cfg = getConfig();
+  if (!cloudApiEnabled(cfg) && !cfg.MOCK_WHATSAPP_API) return [];
   return [...(cfg.WHATSAPP_GROUP_ID ? [cfg.WHATSAPP_GROUP_ID] : []), ...cfg.WHATSAPP_SUPERVISOR_NUMBERS];
 }
 
@@ -177,6 +178,10 @@ export async function sendGroupMessage(
     return { ok: true, mocked: true, attempts: 0 };
   }
 
+  if (!cloudApiEnabled(cfg)) {
+    return { ok: false, mocked: false, attempts: 0, error: 'WhatsApp Cloud API is not configured' };
+  }
+
   let lastError = '';
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
@@ -235,8 +240,19 @@ export async function broadcastAlert(body: string, priority: MessagePriority = '
   };
 }
 
+/** Extra alert destinations (e.g. the linked-device group bot) register here. */
+export type AlertSink = (body: string, priority: MessagePriority) => Promise<void>;
+const alertSinks = new Set<AlertSink>();
+export function registerAlertSink(sink: AlertSink): () => void {
+  alertSinks.add(sink);
+  return () => alertSinks.delete(sink);
+}
+
 /** Fire-and-forget wrapper for request handlers: never blocks the response, never rejects. */
 export function dispatchAlert(body: string, priority: MessagePriority = 'standard'): Promise<SendResult> {
+  for (const sink of alertSinks) {
+    sink(body, priority).catch((err) => console.error('[alerts] sink failed:', (err as Error).message));
+  }
   return broadcastAlert(body, priority).catch((err) => {
     console.error('[whatsapp] unexpected dispatch failure:', err);
     return { ok: false, mocked: false, attempts: 0, error: String(err) };

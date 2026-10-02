@@ -7,6 +7,7 @@ const config = validateEnvOrExit();
 import { createApp } from './app';
 import { closePool } from './db/pool';
 import { startOfflineSyncWatchdog } from './services/offlineSync';
+import { linkedWhatsApp } from './channels/linkedWhatsApp';
 
 const app = createApp();
 const server = app.listen(config.PORT, () => {
@@ -16,12 +17,20 @@ const server = app.listen(config.PORT, () => {
 
 const stopWatchdog = startOfflineSyncWatchdog();
 
+if (config.WA_LINKED_ENABLED) {
+  linkedWhatsApp
+    .start()
+    .then(() => console.log(`[gatekeeper] WhatsApp group bot starting; link the phone at /admin/whatsapp`))
+    .catch((err) => console.error('[gatekeeper] WhatsApp group bot failed to start:', err));
+}
+
 let shuttingDown = false;
 async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[gatekeeper] ${signal} received, draining…`);
   stopWatchdog();
+  await linkedWhatsApp.stop().catch(() => undefined);
   server.close(async () => {
     await closePool().catch(() => undefined);
     process.exit(0);

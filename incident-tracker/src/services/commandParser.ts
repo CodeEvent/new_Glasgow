@@ -46,9 +46,39 @@ export function parseCommand(text: string | undefined | null): BotCommand | null
 
 export const HELP_TEXT =
   '🤖 *GATEKEEPER BOT*\n\n' +
-  'Look up a patron by ticket code or by seat:\n' +
-  '• *Check TM-847294-X*\n' +
-  '• *Check Section 112 Row F Seat 14*\n' +
-  '• *Check 112 F 14*\n\n' +
+  'Send a seat to see if that person was refused:\n' +
+  '• *BB 212 100*  (section, row, seat)\n' +
+  '• *Section 112 Row F Seat 14*\n' +
+  '• *Check TM-847294-X*  (ticket code)\n\n' +
   'You get their status, cool-off time left, description and every gate they have tried.\n' +
   '• *Help*: this message';
+
+// A bare seat typed into a busy group: "BB 212 100", "BB/212/100", "A F 14".
+const BARE_SEAT_RE = /^\s*([a-z0-9]{1,6})\s*[\s/,|]\s*([a-z0-9]{1,4})\s*[\s/,|]\s*(\d{1,4})\s*[.!?]*\s*$/i;
+// "Section BB Row 212 Seat 100" without the word Check.
+const BARE_LABELLED_RE = new RegExp(`^\\s*${SEAT_LABELLED_RE.source.slice(1, -1)}\\s*[.!?]*\\s*$`, 'i');
+
+/**
+ * Parses a message posted in the work group. Besides "Check ..." and "Help" it
+ * accepts a bare seat, but only when it clearly looks like one, so ordinary chat
+ * ("see you 10", "back in 5") never gets a reply:
+ *   - exactly three parts, the seat is a number, and
+ *   - at least two parts contain digits, or the section/row letters are typed in capitals.
+ */
+export function parseGroupMessage(text: string | undefined | null): BotCommand | null {
+  if (!text) return null;
+  const cmd = parseCommand(text);
+  if (cmd) return cmd.kind === 'invalid_check' ? null : cmd; // don't nag the group about typos
+
+  const labelled = BARE_LABELLED_RE.exec(text);
+  if (labelled) return { kind: 'check_seat', section: labelled[1], row: labelled[2], seat: labelled[3] };
+
+  const m = BARE_SEAT_RE.exec(text);
+  if (!m) return null;
+  const [, section, row, seat] = m;
+  const digitParts = [section, row, seat].filter((p) => /\d/.test(p)).length;
+  const letters = (section + row).replace(/[^a-z]/gi, '');
+  const shouted = letters.length > 0 && letters === letters.toUpperCase();
+  if (digitParts >= 2 || shouted) return { kind: 'check_seat', section, row, seat };
+  return null;
+}

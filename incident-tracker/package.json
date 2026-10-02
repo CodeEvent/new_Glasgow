@@ -22,11 +22,13 @@
   },
   "license": "UNLICENSED",
   "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
     "axios": "^1.20.0",
     "dotenv": "^18.0.5",
     "express": "^5.2.1",
     "jsqr": "^1.4.0",
     "pg": "^8.23.1",
+    "qrcode": "^1.5.4",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -34,6 +36,7 @@
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.4",
     "@types/pg": "^8.23.1",
+    "@types/qrcode": "^1.5.6",
     "@types/supertest": "^7.2.1",
     "esbuild": "^0.28.2",
     "supertest": "^7.3.1",

@@ -1,12 +1,13 @@
 import { z } from 'zod';
 
-export const REQUIRED_ENV_VARS = [
-  'DATABASE_URL',
-  'WHATSAPP_ACCESS_TOKEN',
-  'WHATSAPP_PHONE_NUMBER_ID',
-  'WHATSAPP_VERIFY_TOKEN',
-] as const;
-// Plus at least one destination for alerts: WHATSAPP_GROUP_ID and/or WHATSAPP_SUPERVISOR_NUMBERS.
+export const REQUIRED_ENV_VARS = ['DATABASE_URL'] as const;
+
+/**
+ * The official WhatsApp Cloud API is optional (it needs a Meta business account).
+ * If any of these is set, all of them are required, plus an alert destination
+ * (WHATSAPP_GROUP_ID and/or WHATSAPP_SUPERVISOR_NUMBERS).
+ */
+export const CLOUD_API_VARS = ['WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_VERIFY_TOKEN'] as const;
 
 const boolFlag = z
   .string()
@@ -28,17 +29,28 @@ const phoneList = z
       .filter((n) => n.length >= 7),
   );
 
+const optionalText = z.preprocess(blankToUndefined, z.string().trim().optional());
+
 const envObject = z.object({
   DATABASE_URL: nonBlank,
-  WHATSAPP_ACCESS_TOKEN: nonBlank,
-  WHATSAPP_PHONE_NUMBER_ID: nonBlank,
-  WHATSAPP_VERIFY_TOKEN: nonBlank,
+
+  // ---- Official WhatsApp Cloud API (optional) ----
+  WHATSAPP_ACCESS_TOKEN: optionalText,
+  WHATSAPP_PHONE_NUMBER_ID: optionalText,
+  WHATSAPP_VERIFY_TOKEN: optionalText,
   // Alert destinations: a WhatsApp group (Cloud API Groups) and/or individual supervisor numbers.
   WHATSAPP_GROUP_ID: z.preprocess(blankToUndefined, z.string().trim().optional()),
   WHATSAPP_SUPERVISOR_NUMBERS: phoneList,
   // Approved template used when Meta refuses free-form text (recipient silent for 24h+). Body must have one {{1}}.
   WHATSAPP_ALERT_TEMPLATE: z.preprocess(blankToUndefined, z.string().trim().optional()),
   WHATSAPP_TEMPLATE_LANG: z.string().trim().default('en_GB'),
+
+  // ---- Linked-device group bot (a spare WhatsApp number that sits in your work group) ----
+  WA_LINKED_ENABLED: boolFlag,
+  // Also post refusal / hub-hop / breach alerts into the selected groups (off = answer checks only).
+  WA_LINKED_POST_ALERTS: boolFlag,
+  // Protects /admin (linking the phone, choosing groups). Required when WA_LINKED_ENABLED.
+  ADMIN_API_KEY: optionalText,
 
   // Optional tuning / hardening.
   PORT: z.coerce.number().int().positive().default(3000),
@@ -61,16 +73,30 @@ const envObject = z.object({
 });
 
 const envSchema = envObject.superRefine((v, ctx) => {
-  if (!v.WHATSAPP_GROUP_ID && v.WHATSAPP_SUPERVISOR_NUMBERS.length === 0) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['WHATSAPP_GROUP_ID'],
-      message: 'set WHATSAPP_GROUP_ID and/or WHATSAPP_SUPERVISOR_NUMBERS so alerts have somewhere to go',
-    });
+  const cloudSet = CLOUD_API_VARS.filter((k) => v[k]);
+  if (cloudSet.length > 0) {
+    for (const k of CLOUD_API_VARS) {
+      if (!v[k]) ctx.addIssue({ code: 'custom', path: [k], message: `required when the WhatsApp Cloud API is configured (${cloudSet.join(', ')} set)` });
+    }
+    if (!v.WHATSAPP_GROUP_ID && v.WHATSAPP_SUPERVISOR_NUMBERS.length === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['WHATSAPP_GROUP_ID'],
+        message: 'set WHATSAPP_GROUP_ID and/or WHATSAPP_SUPERVISOR_NUMBERS so Cloud API alerts have somewhere to go',
+      });
+    }
+  }
+  if (v.WA_LINKED_ENABLED && !v.ADMIN_API_KEY) {
+    ctx.addIssue({ code: 'custom', path: ['ADMIN_API_KEY'], message: 'required when WA_LINKED_ENABLED=true (it protects the phone-linking page)' });
   }
 });
 
 export type AppConfig = z.infer<typeof envSchema>;
+
+/** True when the official Meta WhatsApp Cloud API is configured. */
+export function cloudApiEnabled(cfg: AppConfig = getConfig()): boolean {
+  return Boolean(cfg.WHATSAPP_ACCESS_TOKEN && cfg.WHATSAPP_PHONE_NUMBER_ID && cfg.WHATSAPP_VERIFY_TOKEN);
+}
 
 let cached: AppConfig | null = null;
 

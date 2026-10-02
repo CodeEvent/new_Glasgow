@@ -190,7 +190,12 @@ whatsappWebhookRouter.get('/incoming', (req: Request, res: Response) => {
     res.status(400).type('text/plain').send('Missing hub.mode, hub.verify_token or hub.challenge');
     return;
   }
-  const expected = Buffer.from(getConfig().WHATSAPP_VERIFY_TOKEN);
+  const verifyToken = getConfig().WHATSAPP_VERIFY_TOKEN;
+  if (!verifyToken) {
+    res.status(404).type('text/plain').send('WhatsApp Cloud API is not configured on this server');
+    return;
+  }
+  const expected = Buffer.from(verifyToken);
   const given = Buffer.from(token);
   const tokenOk = expected.length === given.length && crypto.timingSafeEqual(expected, given);
   if (mode === 'subscribe' && tokenOk) {

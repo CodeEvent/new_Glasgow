@@ -5,18 +5,20 @@ import { buildTextPayload, flattenForTemplate, graphMessagesUrl } from '../src/s
 import { extractFailedDeliveries, extractTextMessages, isFromDesignatedGroup } from '../src/routes/whatsappWebhook';
 
 describe('environment validation', () => {
-  it('lists every missing required variable', () => {
+  it('only DATABASE_URL is always required; WhatsApp Cloud settings are all-or-nothing', () => {
+    expect(() => loadConfig({})).toThrow(/DATABASE_URL is required/);
+    expect(() => loadConfig({ DATABASE_URL: 'x' })).not.toThrow(); // web-only, no WhatsApp at all
     try {
-      loadConfig({ WHATSAPP_GROUP_ID: 'x' });
+      loadConfig({ DATABASE_URL: 'x', WHATSAPP_ACCESS_TOKEN: 'a', WHATSAPP_GROUP_ID: 'g' });
       expect.unreachable();
     } catch (err) {
       expect(err).toBeInstanceOf(EnvValidationError);
       const msg = (err as Error).message;
-      for (const k of ['DATABASE_URL', 'WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_VERIFY_TOKEN']) {
-        expect(msg).toContain(`${k} is required`);
-      }
-      expect(msg).not.toContain('WHATSAPP_GROUP_ID');
+      expect(msg).toContain('WHATSAPP_PHONE_NUMBER_ID');
+      expect(msg).toContain('WHATSAPP_VERIFY_TOKEN');
     }
+    expect(() => loadConfig({ DATABASE_URL: 'x', WA_LINKED_ENABLED: 'true' })).toThrow(/ADMIN_API_KEY/);
+    loadConfig(); // restore test config
   });
 
   it('needs a group or supervisor numbers as the alert destination', () => {
