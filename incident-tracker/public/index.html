@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111418">
+<title>Gatekeeper Intake</title>
+<style>
+  :root {
+    --bg: #111418; --panel: #1b2027; --line: #2c333d; --text: #eef1f4; --muted: #9aa4b1;
+    --accent: #3b82f6; --amber: #f59e0b; --red: #dc2626; --green: #16a34a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: .02em; }
+  header .who { font-size: 13px; color: var(--muted); text-align: right; }
+  main { padding: 16px; max-width: 560px; margin: 0 auto; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  input, select, textarea { width: 100%; padding: 12px; font-size: 16px; color: var(--text); background: #0d1014; border: 1px solid var(--line); border-radius: 8px; }
+  textarea { min-height: 70px; resize: vertical; }
+  button { font: inherit; border: 0; border-radius: 10px; padding: 14px; width: 100%; cursor: pointer; font-weight: 600; color: #fff; background: var(--accent); }
+  button.secondary { background: #2c333d; }
+  button:disabled { opacity: .5; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  .actions { display: grid; gap: 8px; margin-top: 8px; }
+  .action { display: flex; align-items: center; gap: 10px; padding: 14px; border: 2px solid var(--line); border-radius: 10px; cursor: pointer; }
+  .action input { width: auto; transform: scale(1.4); }
+  .action.cool:has(input:checked) { border-color: var(--amber); background: #f59e0b1a; }
+  .action.refuse:has(input:checked) { border-color: var(--red); background: #dc26261a; }
+  .action.admit:has(input:checked) { border-color: var(--green); background: #16a34a1a; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 999px; font-size: 14px; cursor: pointer; }
+  .chip input { width: auto; }
+  .chip:has(input:checked) { border-color: var(--accent); background: #3b82f61f; }
+  .banner { border-radius: 10px; padding: 12px; margin-top: 10px; font-size: 15px; display: none; }
+  .banner.show { display: block; }
+  .banner.warn { background: #7f1d1d; border: 1px solid var(--red); }
+  .banner.ok { background: #14532d; border: 1px solid var(--green); }
+  .banner.note { background: #1e293b; border: 1px solid var(--line); }
+  .muted { color: var(--muted); font-size: 13px; }
+  video { width: 100%; border-radius: 8px; margin-top: 8px; display: none; background: #000; }
+  #queue { display: none; background: #78350f; border: 1px solid var(--amber); border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; font-size: 14px; }
+  #overlay { position: fixed; inset: 0; display: none; flex-direction: column; justify-content: center; padding: 28px; text-align: center; z-index: 10; }
+  #overlay.show { display: flex; }
+  #overlay.critical { background: var(--red); animation: pulse 1s infinite alternate; }
+  #overlay.warning { background: #b45309; }
+  #overlay.info { background: #1d4ed8; }
+  #overlay.clear { background: var(--green); }
+  #overlay h2 { font-size: 30px; margin: 0 0 14px; line-height: 1.15; }
+  #overlay p { font-size: 18px; margin: 0 0 24px; }
+  #overlay button { background: rgba(0,0,0,.35); border: 2px solid rgba(255,255,255,.7); }
+  @keyframes pulse { from { background: #b91c1c; } to { background: #ef4444; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>🛡️ GATEKEEPER</h1>
+  <div class="who" id="who">Not set up</div>
+</header>
+
+<main>
+  <div id="queue"></div>
+
+  <section id="setup">
+    <strong>Shift setup</strong>
+    <label for="steward">Your name</label>
+    <input id="steward" autocomplete="name" placeholder="e.g. Supervisor Dave">
+    <label for="hub">Your screening point</label>
+    <select id="hub">
+      <option value="">Select hub…</option>
+      <option>East Hub</option>
+      <option>West Hub</option>
+      <option>South Hub</option>
+      <option>Hospitality Hub</option>
+    </select>
+    <label for="apikey">Access key (if issued)</label>
+    <input id="apikey" type="password" autocomplete="off">
+    <div style="margin-top:12px"><button id="saveSetup">Start shift</button></div>
+  </section>
+
+  <form id="form" hidden>
+    <section>
+      <strong>1. Ticket</strong>
+      <div class="row" style="margin-top:8px">
+        <button type="button" id="scanBtn">📷 Scan QR</button>
+      </div>
+      <video id="video" playsinline muted></video>
+      <label for="ticket">Ticket ID</label>
+      <input id="ticket" required maxlength="64" autocapitalize="characters" autocomplete="off" placeholder="TM-847294-X">
+      <div id="precheck" class="banner"></div>
+    </section>
+
+    <section>
+      <strong>2. Decision</strong>
+      <div class="actions">
+        <label class="action cool"><input type="radio" name="action" value="cool_off" required> Sent Away (30 Min Cool Down)</label>
+        <label class="action refuse"><input type="radio" name="action" value="refused"> Completely Refused</label>
+        <label class="action admit"><input type="radio" name="action" value="admitted"> Admitted</label>
+      </div>
+    </section>
+
+    <section>
+      <strong>3. Details</strong>
+      <label for="desc">Description</label>
+      <input id="desc" maxlength="2000" placeholder="Male, 6ft, neon green hat">
+      <label>Indicators</label>
+      <div class="chips" id="indicators"></div>
+      <label for="party">Party size</label>
+      <input id="party" type="number" min="1" max="500" value="1" inputmode="numeric">
+      <label for="notes">Additional notes</label>
+      <textarea id="notes" maxlength="2000"></textarea>
+      <p class="muted" id="gps">📍 Location: waiting…</p>
+    </section>
+
+    <button type="submit" id="submitBtn">Submit &amp; alert supervisors</button>
+    <p style="text-align:center"><a href="#" id="changeShift" class="muted">Change name / hub</a></p>
+  </form>
+</main>
+
+<div id="overlay" role="alertdialog" aria-live="assertive">
+  <h2 id="ovTitle"></h2>
+  <p id="ovMsg"></p>
+  <button id="ovClose">Acknowledge</button>
+</div>
+
+<script>
+(() => {
+  const INDICATORS = ['Slurred speech', 'Stumbling / unsteady', 'Strong smell of alcohol', 'Aggressive / combative',
+    'Glazed eyes', 'Vomiting', 'Suspected drugs', 'Unable to stand'];
+  const QUEUE_KEY = 'gk.queue.v1';
+  const SETUP_KEY = 'gk.setup.v1';
+  const $ = (id) => document.getElementById(id);
+
+  const store = {
+    get(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } },
+    set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} },
+  };
+
+  let setup = store.get(SETUP_KEY, {});
+  let coords = null;
+
+  // ---------- Setup ----------
+  function applySetup() {
+    const ready = setup.steward && setup.hub;
+    $('setup').hidden = !!ready;
+    $('form').hidden = !ready;
+    $('who').textContent = ready ? `${setup.steward} · ${setup.hub}` : 'Not set up';
+  }
+  $('steward').value = setup.steward || '';
+  $('hub').value = setup.hub || '';
+  $('apikey').value = setup.apiKey || '';
+  $('saveSetup').onclick = () => {
+    const steward = $('steward').value.trim(), hub = $('hub').value;
+    if (!steward || !hub) { alert('Enter your name and select your hub.'); return; }
+    setup = { steward, hub, apiKey: $('apikey').value.trim() };
+    store.set(SETUP_KEY, setup);
+    applySetup();
+  };
+  $('changeShift').onclick = (e) => { e.preventDefault(); setup = { ...setup, hub: '' }; applySetup(); };
+
+  for (const name of INDICATORS) {
+    const l = document.createElement('label');
+    l.className = 'chip';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.value = name;
+    l.append(cb, document.createTextNode(name));
+    $('indicators').append(l);
+  }
+
+  // ---------- GPS ----------
+  if ('geolocation' in navigator) {
+    navigator.geolocation.watchPosition(
+      (p) => { coords = { latitude: +p.coords.latitude.toFixed(7), longitude: +p.coords.longitude.toFixed(7) }; $('gps').textContent = `📍 Location: ${coords.latitude}, ${coords.longitude}`; },
+      () => { $('gps').textContent = '📍 Location unavailable (optional)'; },
+      { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 });
+  } else {
+    $('gps').textContent = '📍 Location unavailable (optional)';
+  }
+
+  // ---------- API ----------
+  function headers() {
+    const h = { 'Content-Type': 'application/json' };
+    if (setup.apiKey) h['x-api-key'] = setup.apiKey;
+    return h;
+  }
+
+  function banner(kind, text) {
+    const b = $('precheck');
+    b.className = `banner show ${kind}`;
+    b.textContent = text;
+  }
+
+  async function precheck(id) {
+    if (!id) { $('precheck').className = 'banner'; return; }
+    try {
+      const res = await fetch(`/api/tickets/${encodeURIComponent(id)}`, { headers: headers() });
+      const data = await res.json();
+      if (!res.ok) { banner('note', data.offline ? '⚠️ Database offline — cannot check history. Treat with caution.' : 'Could not check ticket.'); return; }
+      if (!data.found) { banner('ok', '✅ No incident on record for this ticket.'); return; }
+      if (data.flagged) {
+        const otherHub = data.origin_hub && data.origin_hub !== setup.hub;
+        const left = data.mins_left ? ` · ${data.mins_left} mins of cool-off left` : '';
+        banner('warn', `⛔ ${data.status_label} at ${data.origin_hub}${left}. ${data.ticket.description}` +
+          (otherHub ? ' — POSSIBLE HUB HOPPER. Submit to alert supervisors.' : ''));
+      } else {
+        banner('note', `Previously admitted. ${data.ticket.events.length} scan(s) on record.`);
+      }
+    } catch {
+      banner('note', '📶 No signal — history check unavailable. Submissions will be queued.');
+    }
+  }
+
+  let precheckTimer;
+  $('ticket').addEventListener('input', () => {
+    clearTimeout(precheckTimer);
+    precheckTimer = setTimeout(() => precheck($('ticket').value.trim()), 400);
+  });
+
+  function showOverlay(screen) {
+    const ov = $('overlay');
+    ov.className = `show ${screen.level}`;
+    $('ovTitle').textContent = screen.headline;
+    $('ovMsg').textContent = screen.message;
+    if (navigator.vibrate && screen.level === 'critical') navigator.vibrate([400, 150, 400, 150, 400]);
+  }
+  $('ovClose').onclick = () => { $('overlay').className = ''; };
+
+  // ---------- Device-side offline queue ----------
+  function queue() { return store.get(QUEUE_KEY, []); }
+  function renderQueue() {
+    const n = queue().length;
+    $('queue').style.display = n ? 'block' : 'none';
+    $('queue').textContent = `📶 ${n} submission${n === 1 ? '' : 's'} waiting for signal — will send automatically.`;
+  }
+  async function send(payload) {
+    const res = await fetch('/api/scan', { method: 'POST', headers: headers(), body: JSON.stringify(payload) });
+    const data = await res.json().catch(() => ({}));
+    return { res, data };
+  }
+  let flushing = false;
+  async function flushQueue() {
+    if (flushing) return;
+    flushing = true;
+    try {
+      let q = queue();
+      while (q.length) {
+        try {
+          const { res } = await send(q[0]);
+          if (res.status >= 500) break; // server trouble: keep and retry later
+        } catch { break; } // still offline
+        q = queue().slice(1); // 2xx or 4xx: done with this entry
+        store.set(QUEUE_KEY, q);
+      }
+    } finally { flushing = false; renderQueue(); }
+  }
+  window.addEventListener('online', flushQueue);
+  setInterval(flushQueue, 20000);
+  renderQueue();
+  flushQueue();
+
+  // ---------- Submit ----------
+  $('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const action = document.querySelector('input[name=action]:checked');
+    const payload = {
+      ticket_id: $('ticket').value.trim(),
+      hub_location: setup.hub,
+      steward_name: setup.steward,
+      action_logged: action && action.value,
+      party_size: Number($('party').value) || 1,
+      description: $('desc').value.trim() || undefined,
+      indicators: [...document.querySelectorAll('#indicators input:checked')].map((c) => c.value),
+      reasoning: $('notes').value.trim() || undefined,
+      occurred_at: new Date().toISOString(),
+      ...(coords || {}),
+    };
+    $('submitBtn').disabled = true;
+    try {
+      const { res, data } = await send(payload);
+      if (res.status === 400) { alert('Please fix: ' + (data.details || []).map((d) => `${d.field}: ${d.message}`).join('\n')); return; }
+      if (res.status === 401) { alert('Access key rejected. Tap "Change name / hub" and re-enter it.'); return; }
+      if (!res.ok) throw new Error('server');
+      showOverlay(data.screen);
+      resetForm();
+    } catch {
+      store.set(QUEUE_KEY, [...queue(), payload]);
+      renderQueue();
+      showOverlay({ level: 'warning', headline: 'Saved on this phone', message: 'No connection. The record is queued and will send automatically when signal returns. Radio your supervisor for anything urgent.' });
+      resetForm();
+    } finally {
+      $('submitBtn').disabled = false;
+    }
+  });
+
+  function resetForm() {
+    $('form').reset();
+    $('party').value = 1;
+    $('precheck').className = 'banner';
+  }
+
+  // ---------- QR scanning ----------
+  let stream = null;
+  async function stopScan() {
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    stream = null;
+    $('video').style.display = 'none';
+    $('scanBtn').textContent = '📷 Scan QR';
+  }
+  $('scanBtn').onclick = async () => {
+    if (stream) return stopScan();
+    if (!('BarcodeDetector' in window)) { alert('QR scanning is not supported in this browser. Type the ticket ID instead.'); $('ticket').focus(); return; }
+    try {
+      const detector = new BarcodeDetector({ formats: ['qr_code'] });
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      const video = $('video');
+      video.srcObject = stream;
+      video.style.display = 'block';
+      await video.play();
+      $('scanBtn').textContent = '✖ Stop scanning';
+      const loop = async () => {
+        if (!stream) return;
+        try {
+          const codes = await detector.detect(video);
+          if (codes.length) {
+            const value = codes[0].rawValue.trim().slice(0, 64);
+            $('ticket').value = value;
+            stopScan();
+            precheck(value);
+            return;
+          }
+        } catch {}
+        requestAnimationFrame(loop);
+      };
+      loop();
+    } catch {
+      stopScan();
+      alert('Camera unavailable. Type the ticket ID instead.');
+    }
+  };
+
+  // Support QR codes that encode a link like /?t=TICKET_ID
+  const fromUrl = new URLSearchParams(location.search).get('t');
+  applySetup();
+  if (fromUrl) { $('ticket').value = fromUrl.slice(0, 64); precheck(fromUrl); }
+})();
+</script>
+</body>
+</html>
