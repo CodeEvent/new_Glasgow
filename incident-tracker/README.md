@@ -12,7 +12,8 @@ Steward phone (public/index.html) ──POST /api/scan──▶ Express API ─�
 WhatsApp group ──"Check X"──▶ POST /api/whatsapp/incoming ──▶ lookup ──▶ reply to group
 ```
 
-> **To text it from your own WhatsApp, follow [GO_LIVE.md](GO_LIVE.md).** It covers Supabase, Render and the Meta WhatsApp app, step by step.
+> **To use it from your work WhatsApp group, follow [WHATSAPP_GROUP_BOT.md](WHATSAPP_GROUP_BOT.md).** Stewards log refusals with a photo and caption (`REFUSED BB 212 100 West very drunk`) and check seats by sending `BB 212 100`. No Meta business account is needed.
+> The official Meta WhatsApp Cloud API route (needs a verified business) is in [GO_LIVE.md](GO_LIVE.md).
 
 ## Quick start
 

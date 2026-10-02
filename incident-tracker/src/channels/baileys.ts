@@ -16,7 +16,10 @@ export interface BaileysModule {
   DisconnectReason: Record<string, number>;
   Browsers: Record<string, (name: string) => [string, string, string]>;
   fetchLatestBaileysVersion: () => Promise<{ version: [number, number, number] }>;
+  downloadMediaMessage: (msg: WAMessage, type: 'buffer', options: Record<string, unknown>) => Promise<Buffer>;
 }
+
+export type OutgoingContent = { text: string } | { image: Buffer; caption?: string; mimetype?: string };
 
 export interface WAMessage {
   key: { remoteJid?: string | null; fromMe?: boolean | null; id?: string | null; participant?: string | null };
@@ -28,7 +31,7 @@ export interface WAMessage {
 export interface WASocket {
   ev: { on(event: string, handler: (arg: any) => void): void; removeAllListeners(event?: string): void };
   user?: { id: string; name?: string } | null;
-  sendMessage(jid: string, content: { text: string }, options?: { quoted?: WAMessage }): Promise<unknown>;
+  sendMessage(jid: string, content: OutgoingContent, options?: { quoted?: WAMessage }): Promise<unknown>;
   groupFetchAllParticipating(): Promise<Record<string, { id: string; subject: string; participants: unknown[] }>>;
   requestPairingCode(phoneNumber: string): Promise<string>;
   logout(): Promise<void>;

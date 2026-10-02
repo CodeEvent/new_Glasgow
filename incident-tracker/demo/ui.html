@@ -315,7 +315,7 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
     <section class="col chat-col" aria-label="Supervisors WhatsApp group">
       <div class="chat-head">
         <div class="avatar" aria-hidden="true">GC</div>
-        <div><strong>Gate Control — Supervisors</strong><span>Gatekeeper Bot, Head of Security, 6 hub supervisors</span></div>
+        <div><strong>Stewards work group</strong><span>Gatekeeper (spare number), you, 24 stewards</span></div>
       </div>
       <div class="scroll" id="feedScroll">
         <div class="feed" id="feed">
@@ -327,7 +327,7 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
         <div class="chips" id="suggest"></div>
         <form id="chatForm">
           <label for="chatInput" class="eyebrow" hidden>Message the group</label>
-          <input id="chatInput" autocomplete="off" placeholder="Message as Head of Security… e.g. Check 112 F 14">
+          <input id="chatInput" autocomplete="off" placeholder="Message the group… e.g. BB 212 100 or 30 BB 212 100 West drunk">
           <button class="btn accent send" type="submit">Send</button>
         </form>
       </div>
@@ -350,7 +350,7 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
               <button class="btn" data-scenario="breach">Bad admission<small>Refused at East, let in at Hospitality</small></button>
               <button class="btn" data-scenario="served">Cool-off served<small>30 min pass, re-admitted</small></button>
               <button class="btn" data-scenario="outage">Database outage<small>Buffer offline, then re-sync</small></button>
-              <button class="btn" data-scenario="bot">Ask the bot<small>Check by seat + an unknown ticket</small></button>
+              <button class="btn" data-scenario="bot">Ask the bot<small>Check a flagged seat + an unknown one</small></button>
               <button class="btn accent" data-scenario="all">Run all<small>Ticks the whole checklist</small></button>
             </div>
           </div>
@@ -464,8 +464,8 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
     ['seat', 'Rotated code matched by seat', 'A different QR code at the next gate, recognised by section / row / seat'],
     ['c', 'Unauthorized admission caught', 'Scenario C: flagged ticket admitted, critical alert names the steward'],
     ['served', 'Cool-off served correctly', 'Admitted after 30 min is logged as normal, not a breach'],
-    ['bot', 'Bot answered "Check"', 'Ticket profile with scan history posted back to the group'],
-    ['nf', 'Bot handled an unknown ticket', '"No Database Record" reply'],
+    ['bot', 'Bot answered a seat check', 'Ticket profile with scan history posted back to the group'],
+    ['nf', 'Bot answered an unknown seat', '"NOT REFUSED" reply'],
     ['buffer', 'Outage buffered offline', 'Scan written to offline_incidents.log while the database was down'],
     ['resync', 'Offline log re-synced', 'Replayed into PostgreSQL with a "Delayed sync" alert'],
   ];
@@ -649,7 +649,7 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
     const div = document.createElement('div');
     const prio = priority === 'critical' || priority === 'high' ? priority : '';
     div.className = `msg ${kind} ${prio}`;
-    const who = kind === 'bot' ? 'Gatekeeper Bot' : 'Head of Security';
+    const who = kind === 'bot' ? 'Gatekeeper' : 'You (steward)';
     const tag = prio ? `<span class="prio">${prio === 'critical' ? 'Critical' : 'High priority'}</span>` : '';
     div.innerHTML = `<span class="who">${who}${tag}</span>${waFormat(text)}<span class="time">${clock(time)}</span>`;
     $('feed').append(div);
@@ -664,8 +664,8 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
   function onBotMessage(m) {
     const body = m.text.body;
     addBubble('bot', body, m.sent_at, m.priority);
-    if (body.includes('TICKET PROFILE RETRIEVED')) tick('bot');
-    if (body.includes('No Database Record Extracted')) tick('nf');
+    if (/\*(REFUSED|COOLING OFF|ADMITTED|COOL-OFF ENDED)\* ·/.test(body) || body.includes('TICKET PROFILE RETRIEVED')) tick('bot');
+    if (body.includes('NOT REFUSED') || body.includes('No Database Record Extracted')) tick('nf');
     if (body.includes('DELAYED SYNC')) tick('resync');
   }
   async function sendChat(text) {
@@ -682,9 +682,10 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
   function renderSuggestions() {
     const first = recent[0];
     const items = [
-      ...(first && seatOf[first] ? [`Check Section ${seatOf[first].section} Row ${seatOf[first].row} Seat ${seatOf[first].seat}`] : []),
-      ...recent.slice(0, 2).map((t) => `Check ${t}`),
-      'Check TM-000000-Z',
+      ...(first && seatOf[first] ? [`${seatOf[first].section} ${seatOf[first].row} ${seatOf[first].seat}`] : []),
+      '30 BB 212 100 West very drunk',
+      'BB 212 100',
+      'ZZ 1 1',
       'Help',
     ];
     $('suggest').innerHTML = items.map((s) => `<button type="button" class="chip" data-s="${esc(s)}">${esc(s)}</button>`).join('');
@@ -849,9 +850,9 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
     async bot() {
       const t = recent[0] || (await SCENARIOS.hop());
       const st = seatOf[t];
-      await sendChat(st ? `Check ${st.section} ${st.row} ${st.seat}` : `Check ${t}`);
+      await sendChat(st ? `${st.section} ${st.row} ${st.seat}` : `Check ${t}`);
       await wait(900);
-      await sendChat('Check TM-000000-Z');
+      await sendChat('ZZ 1 1');
     },
     async all() {
       const t = await SCENARIOS.hop();
@@ -859,9 +860,9 @@ td.mono, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nu
       await SCENARIOS.breach();
       await SCENARIOS.served();
       await SCENARIOS.outage();
-      await sendChat(st ? `Check Section ${st.section} Row ${st.row} Seat ${st.seat}` : `Check ${t}`);
+      await sendChat(st ? `${st.section} ${st.row} ${st.seat}` : `Check ${t}`);
       await wait(900);
-      await sendChat('Check TM-000000-Z');
+      await sendChat('ZZ 1 1');
     },
   };
   document.querySelectorAll('[data-scenario]').forEach((b) => b.addEventListener('click', async () => {

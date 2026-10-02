@@ -1,4 +1,6 @@
-# Going live: text Gatekeeper from your own WhatsApp
+# Going live with the official WhatsApp Cloud API
+
+> **No registered business?** Use [WHATSAPP_GROUP_BOT.md](WHATSAPP_GROUP_BOT.md) instead. It puts Gatekeeper in your existing work group via a spare number and needs no Meta account. This page is for when a verified business (e.g. your employer) owns the WhatsApp account.
 
 About 45 minutes. When you finish, you will text **Check 112 F 14** from your phone and get the ticket profile back, and every refusal, hub-hop and breach logged on the steward form will land on your WhatsApp.
 

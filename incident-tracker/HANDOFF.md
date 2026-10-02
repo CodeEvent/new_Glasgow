@@ -1,4 +1,36 @@
-# Handoff: WhatsApp group bot (work in progress)
+# Handoff: Gatekeeper WhatsApp group bot
+
+Read this first if you're picking up the work in a new Claude Code session.
+
+## Current state (latest)
+
+The **simple WhatsApp-only flow is built and tested** (58 tests pass). It hasn't been run against real WhatsApp yet: the build sandbox blocks web.whatsapp.com.
+
+**How it works** (`src/services/stewardBot.ts`, class `StewardBot`, wired into `src/channels/linkedWhatsApp.ts`):
+- **Log:** a steward sends a photo, of the Ticketmaster QR (decoded by `src/services/qrImage.ts`: jimp + jsQR; long payloads stored as `QR-<sha256>`) or of the customer (stored in `ticket_photos`), and/or text such as `REFUSED BB 212 100 West green hat, very drunk` or `30 BB 212 100 West`.
+  - Missing decision, seat, hub or reason is asked for, one question at a time.
+  - The time is the message time, and each steward's hub is remembered for 12 hours.
+  - Saving goes through the existing `processScan`, so hub-hop detection works: a log at a second hub replies "🚨 ALREADY …".
+- **Check:** `BB 212 100` returns `formatQuickCheck` output plus the latest photo.
+- `UNDO` removes your last new record (within 15 min), `CANCEL` drops a half-finished log, and `HELP` shows the commands.
+- **Where:** the groups ticked on `/admin/whatsapp`, plus private chats from members of those groups. Ordinary chat and photos without a QR or caption are ignored.
+- **Retention:** `src/services/retention.ts` deletes tickets untouched for `RETENTION_HOURS` (default 24) every 15 minutes, which cascades to events and photos. It's started in `server.ts`.
+- **Migration `004_ticket_photos`:** photos table plus an index on `tickets.updated_at`.
+- **Tests:** `tests/stewardBot.test.ts` (parsing, QR decode, full conversation flows, hub-hop, undo, retention), `tests/linkedWhatsApp.test.ts` (routing with a fake WhatsApp socket, photo download mocked) and `tests/pgAuthState.test.ts` (session round-trip with real Baileys `BufferJSON`).
+- **Docs:** `WHATSAPP_GROUP_BOT.md` is the owner's setup guide. `render.yaml` defaults to the group bot (`WA_LINKED_ENABLED=true`, `ADMIN_API_KEY` generated, one instance).
+- **Demo:** the chat pane now runs `StewardBot` (text only; jimp is stubbed in the browser build). Hosted demo: https://claude.ai/artifact/CZtyogYLfedr13bK7q2xpF
+
+**Next:** deploy (Supabase plus a Render blueprint), link the spare phone at `/admin/whatsapp`, tick the work group, and test in the real group. Watch Render logs for `[linked-wa]` lines.
+
+**Known limits:**
+- Ticketmaster SafeTix QR codes rotate, so matching across gates relies on the seat.
+- The linked-device approach is unofficial, and the spare number could be banned.
+- Half-finished conversations and remembered hubs live in memory and are lost on restart.
+
+---
+
+## Earlier notes
+
 
 Read this first if you're picking up the work in a new Claude Code session.
 

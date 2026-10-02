@@ -67,6 +67,8 @@ const envObject = z.object({
   DATABASE_SSL: boolFlag,
   OFFLINE_LOG_PATH: z.string().trim().default('offline_incidents.log'),
   COOL_OFF_MINUTES: z.coerce.number().int().positive().default(30),
+  // Records (and photos) untouched for this long are deleted automatically.
+  RETENTION_HOURS: z.coerce.number().int().positive().default(24),
   DB_POOL_MAX: z.coerce.number().int().positive().default(10),
   OFFLINE_SYNC_INTERVAL_MS: z.coerce.number().int().min(500).default(15_000),
   TZ_DISPLAY: z.string().trim().default('Europe/London'),

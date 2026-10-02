@@ -2,6 +2,7 @@ import { getConfig } from '../config/env';
 import { HELP_TEXT, parseGroupMessage } from '../services/commandParser';
 import { formatQuickCheck } from '../services/quickCheck';
 import { getTicketProfile, getTicketProfileBySeat } from '../services/ticketLookup';
+import { StewardBot } from '../services/stewardBot';
 import { registerAlertSink } from '../services/whatsapp';
 import { loadBaileys, type WAMessage, type WASocket } from './baileys';
 import { clearPostgresAuthState, getSetting, setSetting, usePostgresAuthState } from './pgAuthState';
@@ -73,6 +74,16 @@ export function messageText(message: any): string | null {
   return m?.conversation ?? m?.extendedTextMessage?.text ?? m?.imageMessage?.caption ?? null;
 }
 
+/** The image part of a message (looking inside disappearing / view-once wrappers), if any. */
+export function messageImage(message: any): { mimetype?: string; caption?: string } | null {
+  let m = message;
+  for (let i = 0; i < 4 && m; i++) {
+    if (m.imageMessage) return m.imageMessage;
+    m = m.ephemeralMessage?.message ?? m.viewOnceMessage?.message ?? m.viewOnceMessageV2?.message;
+  }
+  return null;
+}
+
 function timestampSeconds(ts: WAMessage['messageTimestamp']): number {
   if (typeof ts === 'number') return ts;
   if (ts && typeof (ts as any).toNumber === 'function') return (ts as any).toNumber();
@@ -102,6 +113,10 @@ export class LinkedWhatsApp {
   seenGroups = new Map<string, number>();
 
   private sock: WASocket | null = null;
+  private bot = new StewardBot();
+  /** Everyone in the selected groups, so they can also talk to the bot in a private chat. */
+  private members = new Set<string>();
+  private membersRefreshedAt = 0;
   private stopped = false;
   private attempts = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -224,20 +239,70 @@ export class LinkedWhatsApp {
 
   private onMessage(msg: WAMessage): void {
     const jid = msg.key.remoteJid;
-    if (!jid || msg.key.fromMe || !jid.endsWith('@g.us')) return; // groups only, never our own messages
+    if (!jid || msg.key.fromMe) return; // never react to our own messages
+    if (jid.endsWith('@broadcast') || jid.endsWith('@newsletter')) return; // statuses, channels
     if (Date.now() / 1000 - timestampSeconds(msg.messageTimestamp) > MAX_MESSAGE_AGE_S) return;
 
-    if (!this.groups.some((g) => g.jid === jid)) {
+    const isGroup = jid.endsWith('@g.us');
+    if (isGroup && !this.groups.some((g) => g.jid === jid)) {
       this.seenGroups.set(jid, Date.now());
       return;
     }
-    const text = messageText(msg.message);
-    if (!text) return;
+    const senderId = isGroup ? (msg.key.participant ?? '') : jid;
+    if (!senderId) return;
 
     this.enqueue(jid, async () => {
-      const reply = await answerGroupMessage(text);
-      if (reply && this.sock) await this.sock.sendMessage(jid, { text: reply }, { quoted: msg });
+      // Private chats are only for colleagues who are in a selected group.
+      if (!isGroup && !(await this.isMember(senderId))) return;
+
+      const img = messageImage(msg.message);
+      let image: { data: Buffer; mime: string } | null = null;
+      if (img) {
+        try {
+          const b = await loadBaileys();
+          image = { data: await b.downloadMediaMessage(msg, 'buffer', {}), mime: img.mimetype ?? 'image/jpeg' };
+        } catch (err) {
+          console.error('[linked-wa] could not download photo:', (err as Error).message);
+        }
+      }
+      const text = img ? (img.caption ?? null) : messageText(msg.message);
+      if (!text && !image) return;
+
+      const replies = await this.bot.handle({
+        chatId: jid,
+        senderId,
+        senderName: msg.pushName ?? senderId.split('@')[0],
+        text,
+        image,
+        at: new Date(timestampSeconds(msg.messageTimestamp) * 1000),
+      });
+      for (const r of replies) {
+        if (!this.sock) return;
+        if (r.image) await this.sock.sendMessage(jid, { image: r.image.data, caption: r.text, mimetype: r.image.mime }, { quoted: msg });
+        else await this.sock.sendMessage(jid, { text: r.text }, { quoted: msg });
+      }
     });
+  }
+
+  private async isMember(senderId: string): Promise<boolean> {
+    if (!this.sock || this.groups.length === 0) return false;
+    if (Date.now() - this.membersRefreshedAt > 10 * 60_000 || !this.members.has(senderId)) {
+      try {
+        const all = await this.sock.groupFetchAllParticipating();
+        const ids = new Set<string>();
+        for (const g of Object.values(all)) {
+          if (!this.groups.some((s) => s.jid === g.id)) continue;
+          for (const p of g.participants as Array<Record<string, string | undefined>>) {
+            for (const k of ['id', 'jid', 'lid', 'phoneNumber']) if (p[k]) ids.add(p[k]!);
+          }
+        }
+        this.members = ids;
+        this.membersRefreshedAt = Date.now();
+      } catch (err) {
+        console.error('[linked-wa] could not refresh group members:', (err as Error).message);
+      }
+    }
+    return this.members.has(senderId);
   }
 
   /** One reply at a time per group, gently paced, with a cap so a flood can't build a backlog. */

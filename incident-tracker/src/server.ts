@@ -8,6 +8,7 @@ import { createApp } from './app';
 import { closePool } from './db/pool';
 import { startOfflineSyncWatchdog } from './services/offlineSync';
 import { linkedWhatsApp } from './channels/linkedWhatsApp';
+import { startRetentionJob } from './services/retention';
 
 const app = createApp();
 const server = app.listen(config.PORT, () => {
@@ -16,6 +17,7 @@ const server = app.listen(config.PORT, () => {
 });
 
 const stopWatchdog = startOfflineSyncWatchdog();
+const stopRetention = startRetentionJob();
 
 if (config.WA_LINKED_ENABLED) {
   linkedWhatsApp
@@ -30,6 +32,7 @@ async function shutdown(signal: string) {
   shuttingDown = true;
   console.log(`[gatekeeper] ${signal} received, draining…`);
   stopWatchdog();
+  stopRetention();
   await linkedWhatsApp.stop().catch(() => undefined);
   server.close(async () => {
     await closePool().catch(() => undefined);

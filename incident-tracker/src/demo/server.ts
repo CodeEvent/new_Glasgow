@@ -76,22 +76,9 @@ async function main() {
         });
       });
 
-      // Supervisor message -> through the real Meta webhook endpoint, exactly as Meta would deliver it.
+      // A steward's message in the work group -> the WhatsApp group bot's conversation logic.
       demo.post('/chat', async (req, res) => {
-        const text = String(req.body?.text ?? '').slice(0, 1000);
-        const payload = {
-          object: 'whatsapp_business_account',
-          entry: [{ changes: [{ field: 'messages', value: { messages: [{
-            id: `wamid.demo.${Date.now()}.${Math.random().toString(36).slice(2)}`,
-            from: '447700900123', type: 'text', group_id: config.WHATSAPP_GROUP_ID, text: { body: text },
-          }] } }] }],
-        };
-        const r = await fetch(`http://127.0.0.1:${config.PORT}/api/whatsapp/incoming`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        res.json({ ok: r.ok, webhook_status: r.status });
+        res.json(await engine.chat(String(req.body?.text ?? '').slice(0, 1000)));
       });
 
       demo.post('/outage', async (req, res) => {

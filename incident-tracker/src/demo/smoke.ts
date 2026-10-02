@@ -50,7 +50,9 @@ async function main() {
 
   const r = await engine.chat('check tm-1');
   expect('chat Check handled', r.handled);
-  expect('profile reply', engine.messages().at(-1)!.text.body.includes('TICKET PROFILE RETRIEVED'));
+  expect('seat check reply', /\*(REFUSED|COOLING OFF|ADMITTED)\* ·/.test(engine.messages().at(-1)!.text.body));
+  const logged = await engine.chat('30 QQ 9 9 West testing');
+  expect('log via chat', logged.handled && engine.messages().at(-1)!.text.body.includes('✅ Logged'));
 
   await engine.setOutage(true);
   const off = await engine.scan({ ...base, ticket_id: 'TM-3', hub_location: 'South Hub', action_logged: 'refused' });

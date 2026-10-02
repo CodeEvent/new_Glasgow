@@ -39,8 +39,8 @@ await build({
       // Swap Node-only modules for in-memory browser stubs (exact specifiers only).
       name: 'browser-stubs',
       setup(b) {
-        const map = { fs: 'fs', 'fs/promises': 'fs-promises', path: 'path', crypto: 'crypto', express: 'express', pg: 'pg' };
-        b.onResolve({ filter: /^(node:)?(fs|fs\/promises|path|crypto|express|pg)$/ }, (args) => ({
+        const map = { fs: 'fs', 'fs/promises': 'fs-promises', path: 'path', crypto: 'crypto', express: 'express', pg: 'pg', jimp: 'jimp' };
+        b.onResolve({ filter: /^(node:)?(fs|fs\/promises|path|crypto|express|pg|jimp)$/ }, (args) => ({
           path: stub(map[args.path.replace(/^node:/, '')]),
         }));
       },

@@ -1,4 +1,6 @@
-# Render Blueprint (repo root). New -> Blueprint -> pick this repo. Builds incident-tracker/Dockerfile. Secrets go in the dashboard (sync: false).
+# Render Blueprint (repo root). New -> Blueprint -> pick this repo. Builds incident-tracker/Dockerfile.
+# Default setup: the WhatsApp group bot on a linked spare number (see incident-tracker/WHATSAPP_GROUP_BOT.md).
+# Run exactly ONE instance: two would fight over the same WhatsApp link.
 services:
   - type: web
     name: gatekeeper
@@ -6,31 +8,26 @@ services:
     rootDir: incident-tracker
     dockerContext: .
     dockerfilePath: ./Dockerfile
-    plan: starter            # free plans sleep after 15 min idle, which delays WhatsApp replies
+    plan: starter            # free plans sleep after 15 min idle, which drops the WhatsApp link
     region: frankfurt
+    numInstances: 1
     healthCheckPath: /healthz
     envVars:
       - key: DATABASE_URL     # Supabase -> Connect -> Session pooler URI
         sync: false
       - key: DATABASE_SSL
         value: "true"
-      - key: WHATSAPP_ACCESS_TOKEN
-        sync: false
-      - key: WHATSAPP_PHONE_NUMBER_ID
-        sync: false
-      - key: WHATSAPP_VERIFY_TOKEN
-        generateValue: true
-      - key: WHATSAPP_APP_SECRET
-        sync: false
-      - key: WHATSAPP_SUPERVISOR_NUMBERS
-        sync: false
-      - key: WHATSAPP_GROUP_ID
-        sync: false
-      - key: WHATSAPP_ALERT_TEMPLATE
-        sync: false
-      - key: STEWARD_API_KEY
-        generateValue: true
-      - key: MOCK_WHATSAPP_API
+      - key: WA_LINKED_ENABLED
+        value: "true"
+      - key: WA_LINKED_POST_ALERTS
         value: "false"
+      - key: ADMIN_API_KEY    # unlocks /admin/whatsapp (linking the phone, choosing the group)
+        generateValue: true
+      - key: STEWARD_API_KEY  # protects the optional web steward form
+        generateValue: true
+      - key: RETENTION_HOURS
+        value: "24"
       - key: TZ_DISPLAY
         value: Europe/London
+      # Official WhatsApp Cloud API (needs a verified Meta business): add WHATSAPP_ACCESS_TOKEN,
+      # WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_VERIFY_TOKEN and WHATSAPP_SUPERVISOR_NUMBERS by hand. See GO_LIVE.md.

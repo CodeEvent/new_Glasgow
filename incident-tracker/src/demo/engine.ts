@@ -1,10 +1,10 @@
 import type { PGlite } from '@electric-sql/pglite';
 import { setPool } from '../db/pool';
-import { extractTextMessages, handleInboundMessage } from '../routes/whatsappWebhook';
 import { handleScanRequest, handleTicketLookup, type ApiResponse } from '../services/scanApi';
 import { offlineLogPath, readOfflineIncidents } from '../services/offlineBuffer';
 import { resyncOfflineIncidents, startOfflineSyncWatchdog } from '../services/offlineSync';
-import { mockOutbox, onMockMessage, type MockMessage } from '../services/whatsapp';
+import { mockOutbox, onMockMessage, sendGroupMessage, type MockMessage } from '../services/whatsapp';
+import { StewardBot } from '../services/stewardBot';
 import { getConfig } from '../config/env';
 import { createPglitePool, type PgliteDemoPool } from './pgliteAdapter';
 
@@ -68,36 +68,18 @@ export async function createDemoEngine(db: PGlite, migrationSql: string): Promis
   setPool(pool);
   startOfflineSyncWatchdog();
 
-  const groupId = getConfig().WHATSAPP_GROUP_ID;
-  let seq = 0;
+  const stewardBot = new StewardBot();
 
   return {
     pool,
     scan: (body) => handleScanRequest(body),
     lookup: (q) => handleTicketLookup(typeof q === 'string' ? { ticket_id: q } : q),
 
-    async chat(text, sender = '447700900123') {
-      // Shape the message exactly as Meta's webhook delivers it, then run the real parser + handler.
-      const payload = {
-        object: 'whatsapp_business_account',
-        entry: [
-          {
-            changes: [
-              {
-                field: 'messages',
-                value: {
-                  messages: [{ id: `wamid.demo.${Date.now()}.${seq++}`, from: sender, type: 'text', group_id: groupId, text: { body: text } }],
-                },
-              },
-            ],
-          },
-        ],
-      };
-      let handled = false;
-      for (const msg of extractTextMessages(payload)) {
-        if ((await handleInboundMessage(msg)) !== null) handled = true;
-      }
-      return { handled };
+    async chat(text, sender = 'steward-you') {
+      // The same conversation logic the real WhatsApp group bot runs; replies appear as bot messages.
+      const replies = await stewardBot.handle({ chatId: 'demo-work-group', senderId: sender, senderName: 'Steward Alex', text });
+      for (const r of replies) await sendGroupMessage(r.text, 'standard');
+      return { handled: replies.length > 0 };
     },
 
     async setOutage(down) {
