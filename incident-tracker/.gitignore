@@ -5,3 +5,4 @@ offline_incidents.log
 *.log
 demo-data/
 dist-web/
+local-data/

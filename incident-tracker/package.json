@@ -18,7 +18,8 @@
     "demo:web": "node demo/build-web.mjs",
     "demo:web:serve": "node demo/serve-web.mjs",
     "start:prod": "node dist/db/migrate.js up && node dist/server.js",
-    "migrate:prod": "node dist/db/migrate.js up"
+    "migrate:prod": "node dist/db/migrate.js up",
+    "local": "tsx src/local/start.ts"
   },
   "license": "UNLICENSED",
   "dependencies": {

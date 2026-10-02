@@ -18,6 +18,42 @@ If a log is missing the decision, seat, hub or reason, the bot asks for it. The 
 
 ---
 
+## Free option: run it on your laptop
+
+No accounts and no cost. The bot connects out to WhatsApp like WhatsApp Web, so it doesn't need a website. It answers while the laptop is **on, awake and online**.
+
+1. **Get the code (once).** In a terminal:
+   ```bash
+   cd ~
+   git clone https://github.com/codeevent/new_glasgow.git
+   cd new_glasgow
+   git checkout claude/inspiring-fermi-ujdf1c
+   cd incident-tracker
+   npm install
+   ```
+   Already cloned? Run `cd ~/new_glasgow && git pull && cd incident-tracker && npm install` instead.
+2. **Start it**, from inside `incident-tracker`:
+   ```bash
+   npm run local
+   ```
+   It prints the setup-page address and your **admin key**.
+3. **Link the phone.** Open `http://localhost:3000/admin/whatsapp` on the laptop, paste the admin key, and scan the QR with the spare phone (WhatsApp → Settings → Linked devices → Link a device). Then tick your work group, **Save**, **Send test**.
+4. **Leave the terminal window open.** `Ctrl+C` stops the bot. Next time, run `npm run local` again; the phone stays linked.
+
+**Keep the laptop awake** on event days:
+- Plug it in.
+- Ubuntu: Settings → Power → set **Automatic Suspend** to **Off**.
+- Keep the lid open, or set it to do nothing when closed.
+- Or start it with `systemd-inhibit --what=sleep:idle npm run local`, which blocks sleep while the bot runs.
+
+Records and photos are saved in `incident-tracker/local-data/` and deleted automatically after 24 hours. If the laptop sleeps or loses internet, the bot reconnects by itself when it's back.
+
+Want it running even when your laptop is off? Use the cloud setup below.
+
+---
+
+## Cloud setup (always on)
+
 ## What you need
 
 - A **spare phone number** (a cheap SIM) in a phone you can leave charged. An old phone is fine.
