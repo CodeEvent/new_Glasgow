@@ -1,5 +1,5 @@
 # ---- build ----
-FROM node:22-alpine AS build
+FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -8,7 +8,8 @@ COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
 # ---- run ----
-FROM node:22-alpine
+# Debian (glibc) rather than Alpine: the WhatsApp/image libraries ship glibc binaries.
+FROM node:22-bookworm-slim
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules
@@ -21,6 +22,6 @@ RUN mkdir -p /app/data && chown node:node /app/data
 ENV OFFLINE_LOG_PATH=/app/data/offline_incidents.log
 USER node
 EXPOSE 3000
-HEALTHCHECK --interval=30s --timeout=5s CMD wget -qO- http://127.0.0.1:${PORT:-3000}/healthz || exit 1
+HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 # Apply pending migrations, then start. exec keeps node as PID 1 for clean shutdowns.
 CMD ["sh", "-c", "node dist/db/migrate.js up && exec node dist/server.js"]
