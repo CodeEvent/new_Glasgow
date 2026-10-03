@@ -9,6 +9,7 @@ import { closePool } from './db/pool';
 import { startOfflineSyncWatchdog } from './services/offlineSync';
 import { linkedWhatsApp } from './channels/linkedWhatsApp';
 import { startRetentionJob } from './services/retention';
+import { startNightJobs } from './services/nightReport';
 
 const app = createApp();
 // HOST=127.0.0.1 keeps the server private to this computer (used by `npm run local`).
@@ -19,6 +20,9 @@ const server = app.listen(config.PORT, process.env.HOST || '0.0.0.0', () => {
 
 const stopWatchdog = startOfflineSyncWatchdog();
 const stopRetention = startRetentionJob();
+
+// Readmit reminders and the end-of-night summary, posted into the selected WhatsApp groups.
+const stopNightJobs = config.WA_LINKED_ENABLED ? startNightJobs((text) => void linkedWhatsApp.postToGroups(text)) : () => undefined;
 
 if (config.WA_LINKED_ENABLED) {
   linkedWhatsApp
@@ -34,6 +38,7 @@ async function shutdown(signal: string) {
   console.log(`[gatekeeper] ${signal} received, draining…`);
   stopWatchdog();
   stopRetention();
+  stopNightJobs();
   await linkedWhatsApp.stop().catch(() => undefined);
   server.close(async () => {
     await closePool().catch(() => undefined);

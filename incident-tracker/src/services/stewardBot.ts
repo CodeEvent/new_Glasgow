@@ -1,5 +1,7 @@
+import { getConfig } from '../config/env';
 import { getPool, isConnectivityError } from '../db/pool';
-import { listRecords, type RecordRow } from './adminRecords';
+import { listRecords, recordsToCsv, updateRecord, type RecordRow } from './adminRecords';
+import { currentStats } from './nightReport';
 import { HUBS, type Hub } from '../domain';
 import { parseGroupMessage } from './commandParser';
 import { formatClock, minutesUntil, sanitize } from './format';
@@ -37,6 +39,7 @@ export interface InboundMessage {
 export interface OutboundReply {
   text: string;
   image?: { data: Buffer; mime: string };
+  document?: { data: Buffer; mime: string; fileName: string };
 }
 
 // ---------------------------------------------------------------- parsing
@@ -293,6 +296,9 @@ export class StewardBot {
   private hubs = new Map<string, { hub: Hub; at: number }>();
   private lastLogs = new Map<string, LastLog>();
 
+  /** Posts to the selected groups except `exceptChatId` (set by the WhatsApp channel). */
+  announce?: (text: string, exceptChatId?: string) => void;
+
   constructor(private readonly now: () => number = Date.now) {}
 
   private key(m: InboundMessage) {
@@ -346,6 +352,15 @@ export class StewardBot {
     if (/^undo$/i.test(text)) return [{ text: await this.undo(m.senderId) }];
     if (/^(help|\?|menu)$/i.test(text)) return [{ text: STEWARD_HELP }];
     if (/^list$/i.test(text)) return [{ text: await this.list() }];
+    if (/^stats$/i.test(text)) return [{ text: await this.stats() }];
+    if (/^report$/i.test(text)) return [await this.report(m)];
+    const clear = /^clear\s+(.+)$/i.exec(text);
+    if (clear && !m.image) return [{ text: await this.clear(clear[1], m) }];
+    const photoCmd = /^photo\s+(.+)$/i.exec(text);
+    if (photoCmd) {
+      if (!m.image) return [{ text: `Send the customer's photo with the caption *PHOTO ${sanitize(photoCmd[1], 30)}*.` }];
+      return [{ text: await this.addPhoto(photoCmd[1], m.image) }];
+    }
 
     // ---- images: a ticket QR starts (or feeds) a log; another photo is the customer's picture.
     if (m.image) {
@@ -493,7 +508,12 @@ export class StewardBot {
     if (outcome.scenario === 'NEW_INCIDENT' && !outcome.previousStatus) {
       this.lastLogs.set(m.senderId, { ticketId: ticket.ticket_id, createdTicket: true, at: this.now() });
     }
-    return confirmation(outcome, hub, p);
+    const reply = confirmation(outcome, hub, p);
+    if (outcome.scenario === 'HUB_HOP_BYPASS' && getConfig().WA_HUBHOP_ALERTS) {
+      // The steward who logged it sees the reply; everyone else in the other chats gets the alert.
+      this.announce?.(`${reply}\n_Logged by ${sanitize(m.senderName || 'a steward', 60)}._`, m.chatId);
+    }
+    return reply;
   }
 
   private async undo(senderId: string): Promise<string> {
@@ -502,6 +522,73 @@ export class StewardBot {
     this.lastLogs.delete(senderId);
     const { rowCount } = await getPool().query('DELETE FROM tickets WHERE ticket_id = $1', [last.ticketId]);
     return rowCount ? '↩️ Removed your last record.' : 'That record was already gone.';
+  }
+
+  // ---------------------------------------------------------------- STATS, REPORT, CLEAR, PHOTO
+
+  private async stats(): Promise<string> {
+    try {
+      return await currentStats(new Date(this.now()));
+    } catch (err) {
+      console.error('[steward-bot] stats failed:', (err as Error).message);
+      return '⚠️ Gatekeeper can’t reach its database right now. Try again in a minute.';
+    }
+  }
+
+  /** The spreadsheet, only in a private chat (it holds descriptions of everyone logged). */
+  private async report(m: InboundMessage): Promise<OutboundReply> {
+    if (m.chatId.endsWith('@g.us')) return { text: 'Send *REPORT* to me in a private chat and I’ll send you the spreadsheet.' };
+    try {
+      const rows = await listRecords({}, 10_000);
+      if (!rows.length) return { text: 'Nothing is on record right now, so there’s no report.' };
+      const stamp = new Date(this.now()).toISOString().slice(0, 16).replace(/[:T]/g, '-');
+      return {
+        text: `📎 ${rows.length} record${rows.length === 1 ? '' : 's'}. Records are deleted automatically after ${getConfig().RETENTION_HOURS} hours; save this file if you need it.`,
+        document: { data: Buffer.from('\ufeff' + recordsToCsv(rows), 'utf8'), mime: 'text/csv', fileName: `gatekeeper-${stamp}.csv` },
+      };
+    } catch (err) {
+      console.error('[steward-bot] report failed:', (err as Error).message);
+      return { text: '⚠️ Gatekeeper can’t reach its database right now. Try again in a minute.' };
+    }
+  }
+
+  private async findBySeat(seatText: string) {
+    const s = parseSeatAnswer(seatText.trim());
+    if (!s) return { error: `Send the seat as section, row, seat, e.g. *52 YY 14*.` };
+    const profile = await getTicketProfileBySeat(s.section!, s.row!, s.seat!);
+    const label = `${s.section} ${s.row} ${s.seat}`;
+    if (!profile) return { error: `Nothing on record for *${label}*.` };
+    return { profile, label };
+  }
+
+  /** CLEAR 52 YY 14: a supervisor says this person may enter now. */
+  private async clear(seatText: string, m: InboundMessage): Promise<string> {
+    try {
+      const f = await this.findBySeat(seatText);
+      if (!f.profile) return f.error!;
+      if (f.profile.current_status === 'admitted') return `🟢 *${f.label}* is already cleared.`;
+      const who = sanitize(m.senderName || 'a steward', 60);
+      const when = formatClock(new Date(this.now()));
+      const desc = f.profile.description && f.profile.description !== 'Not provided' ? `${f.profile.description} · ` : '';
+      await updateRecord(f.profile.ticket_id, { status: 'admitted', description: `${desc}Cleared by ${who} ${when}`.slice(0, 2000) });
+      return `🟢 *${f.label}* cleared by ${who} at ${when}: may enter if fit.\n_Send ${f.label} to check it, or log them again if needed._`;
+    } catch (err) {
+      console.error('[steward-bot] clear failed:', (err as Error).message);
+      return '⚠️ Couldn’t clear that right now. Try again, or use the records page.';
+    }
+  }
+
+  /** Photo captioned PHOTO 52 YY 14: add it to that record. */
+  private async addPhoto(seatText: string, image: { data: Buffer; mime: string }): Promise<string> {
+    try {
+      const f = await this.findBySeat(seatText);
+      if (!f.profile) return f.error!;
+      await getPool().query('INSERT INTO ticket_photos (ticket_id, mime_type, data) VALUES ($1, $2, $3)', [f.profile.ticket_id, image.mime, image.data]);
+      return `📷 Photo added to *${f.label}*. Anyone checking ${f.label} now gets it.`;
+    } catch (err) {
+      console.error('[steward-bot] photo failed:', (err as Error).message);
+      return '⚠️ Couldn’t save that photo. Try again (photos up to 5 MB).';
+    }
   }
 
   // ---------------------------------------------------------------- LIST
@@ -626,7 +713,9 @@ function confirmation(o: ScanOutcome, hub: Hub, p: Pending): string {
 export const STEWARD_HELP =
   '🤖 *GATEKEEPER*\n\n' +
   '*Check a seat:* send section, row, seat, e.g. *52 YY 14*\n' +
-  '*LIST*: everyone refused or sent away right now\n\n' +
+  '*LIST*: everyone refused or sent away right now · *STATS*: tonight’s numbers\n' +
+  '*CLEAR 52 YY 14*: may enter now · photo captioned *PHOTO 52 YY 14*: add a photo\n' +
+  '*REPORT* (private chat): the spreadsheet\n\n' +
   '*Log someone:* send *REFUSED 52 YY 14 West* or *30 52 YY 14 West* (sent away 30 min), ' +
   'or a photo of them or their ticket QR with the seat as the caption, or just *LOG*.\n' +
   'I’ll then ask: hub, reasons, male/female, height, build, minor or adult, and what they’re wearing.\n' +

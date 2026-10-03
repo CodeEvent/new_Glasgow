@@ -30,6 +30,11 @@ const phoneList = z
   );
 
 const optionalText = z.preprocess(blankToUndefined, z.string().trim().optional());
+// On unless set to false/0/no/off.
+const onByDefault = z
+  .string()
+  .optional()
+  .transform((v) => !['false', '0', 'no', 'off'].includes((v ?? '').trim().toLowerCase()));
 
 const envObject = z.object({
   DATABASE_URL: nonBlank,
@@ -49,6 +54,16 @@ const envObject = z.object({
   WA_LINKED_ENABLED: boolFlag,
   // Also post refusal / hub-hop / breach alerts into the selected groups (off = answer checks only).
   WA_LINKED_POST_ALERTS: boolFlag,
+  // Group bot extras (each can be switched off with "off"):
+  // post 🚨 when someone tries a second hub, and 🟡 when a sent-away person may come back.
+  WA_HUBHOP_ALERTS: onByDefault,
+  WA_READMIT_REMINDERS: onByDefault,
+  // End-of-night summary posted to the groups at this time (HH:MM, TZ_DISPLAY), or "off".
+  SUMMARY_TIME: z
+    .string()
+    .trim()
+    .default('23:30')
+    .refine((v) => /^off$/i.test(v) || /^([01]\d|2[0-3]):[0-5]\d$/.test(v), 'SUMMARY_TIME must be HH:MM (e.g. 23:30) or off'),
   // Protects /admin (linking the phone, choosing groups). Required when WA_LINKED_ENABLED.
   ADMIN_API_KEY: optionalText,
 

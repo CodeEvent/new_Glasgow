@@ -5,7 +5,7 @@
 #   git clone --depth 1 -b claude/inspiring-fermi-ujdf1c https://github.com/CodeEvent/new_Glasgow.git ~/new_glasgow
 #   bash ~/new_glasgow/incident-tracker/scripts/android/install.sh
 #
-# Afterwards:  gk-start | gk-stop | gk-status | gk-key | gk-log | gk-update
+# Afterwards:  gk-start | gk-stop | gk-status | gk-key | gk-log | gk-update | gk-set
 set -euo pipefail
 
 # This script updates the folder it lives in, so run a copy of it, not the file git may replace.
@@ -56,6 +56,8 @@ cd "$APP"
 while true; do
   # Keep the log small on the phone.
   [ -f "$DATA/gatekeeper.log" ] && [ "\$(stat -c %s "$DATA/gatekeeper.log")" -gt 5000000 ] && mv -f "$DATA/gatekeeper.log" "$DATA/gatekeeper.old.log"
+  # Optional settings (see gk-set), re-read on every start.
+  if [ -f "$DATA/settings.env" ]; then set -a; . "$DATA/settings.env"; set +a; fi
   echo "[\$(date '+%F %T')] starting" >> "$DATA/gatekeeper.log"
   PORT=$PORT LOCAL_DATA_DIR="$DATA" node node_modules/tsx/dist/cli.mjs src/local/start.ts >> "$DATA/gatekeeper.log" 2>&1 || true
   echo "[\$(date '+%F %T')] stopped; restarting in 10 s" >> "$DATA/gatekeeper.log"
@@ -114,7 +116,26 @@ gk-stop
 git -C "$SRC" checkout -q -B "$BRANCH" FETCH_HEAD
 bash "$APP/scripts/android/install.sh"
 EOF
-chmod +x "$BIN"/gk-start "$BIN"/gk-stop "$BIN"/gk-status "$BIN"/gk-key "$BIN"/gk-log "$BIN"/gk-update
+cat > "$BIN/gk-set" <<EOF
+#!/data/data/com.termux/files/usr/bin/bash
+# gk-set                      show the settings
+# gk-set SUMMARY_TIME 22:45   change one and restart the bot
+F="$DATA/settings.env"
+touch "\$F"
+if [ \$# -lt 2 ]; then echo "Settings (\$F):"; cat "\$F"; echo "(empty = defaults)"; exit 0; fi
+case "\$1" in
+  SUMMARY_TIME|WA_HUBHOP_ALERTS|WA_READMIT_REMINDERS|COOL_OFF_MINUTES|RETENTION_HOURS|TZ_DISPLAY) ;;
+  *) echo "Unknown setting: \$1"; echo "Use one of: SUMMARY_TIME WA_HUBHOP_ALERTS WA_READMIT_REMINDERS COOL_OFF_MINUTES RETENTION_HOURS TZ_DISPLAY"; exit 1 ;;
+esac
+case "\$2" in *\'*) echo "Values can't contain quotes."; exit 1 ;; esac
+grep -v "^\$1=" "\$F" > "\$F.tmp" || true
+echo "\$1='\$2'" >> "\$F.tmp"
+mv "\$F.tmp" "\$F"
+echo "Saved \$1=\$2. Restarting…"
+gk-stop >/dev/null
+gk-start
+EOF
+chmod +x "$BIN"/gk-start "$BIN"/gk-stop "$BIN"/gk-status "$BIN"/gk-key "$BIN"/gk-log "$BIN"/gk-update "$BIN"/gk-set
 
 # ---- start again after the phone restarts (needs the Termux:Boot app, opened once)
 mkdir -p "$HOME/.termux/boot"
@@ -134,5 +155,5 @@ Next:
   2. Paste the admin key above, then link the WhatsApp phone (scan the QR, or use "Get code").
   3. Tick your work group, Save, Send test.
 
-Commands: gk-status · gk-key · gk-log · gk-stop · gk-start · gk-update
+Commands: gk-status · gk-key · gk-log · gk-stop · gk-start · gk-update · gk-set
 EOF

@@ -113,7 +113,11 @@ export class LinkedWhatsApp {
   seenGroups = new Map<string, number>();
 
   private sock: WASocket | null = null;
-  private bot = new StewardBot();
+  private bot = (() => {
+    const bot = new StewardBot();
+    bot.announce = (text, exceptChatId) => void this.postToGroups(text, exceptChatId);
+    return bot;
+  })();
   /** Everyone in the selected groups, so they can also talk to the bot in a private chat. */
   private members = new Set<string>();
   private membersRefreshedAt = 0;
@@ -289,7 +293,10 @@ export class LinkedWhatsApp {
       for (const r of replies) {
         if (!this.sock) return;
         if (r.image) await this.sock.sendMessage(jid, { image: r.image.data, caption: r.text, mimetype: r.image.mime }, { quoted: msg });
-        else await this.sock.sendMessage(jid, { text: r.text }, { quoted: msg });
+        else if (r.document) {
+          await this.sock.sendMessage(jid, { text: r.text }, { quoted: msg });
+          await this.sock.sendMessage(jid, { document: r.document.data, mimetype: r.document.mime, fileName: r.document.fileName });
+        } else await this.sock.sendMessage(jid, { text: r.text }, { quoted: msg });
       }
     });
   }
@@ -330,9 +337,11 @@ export class LinkedWhatsApp {
     this.queues.set(jid, q);
   }
 
-  private async postToGroups(body: string): Promise<void> {
+  /** Post into every selected group (except one, e.g. where the steward already saw it). */
+  async postToGroups(body: string, exceptJid?: string): Promise<void> {
     if (this.status !== 'connected' || !this.sock) return;
     for (const g of this.groups) {
+      if (g.jid === exceptJid) continue;
       this.enqueue(g.jid, async () => {
         await this.sock?.sendMessage(g.jid, { text: body });
       });

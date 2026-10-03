@@ -9,6 +9,15 @@ Stewards log and check refused patrons entirely inside your **work WhatsApp grou
 | `52 YY 14` | 🔴 REFUSED … with the reasons, description, who logged it, where and when, plus the photo |
 | `52 YY 14` (nothing logged) | ✅ NOT REFUSED |
 | `LIST` | everyone refused or sent away right now: seat, reasons, hub and time, description, 🚨 if they tried another hub |
+| `STATS` | tonight's numbers: refused, sent away, cleared, hub-hops, by reason, by hub, minors |
+| `CLEAR 52 YY 14` | 🟢 marks that person as allowed in now (e.g. a supervisor's decision), noting who and when |
+| a photo captioned `PHOTO 52 YY 14` | 📷 adds the photo to an already saved record |
+| `REPORT` (in a **private chat** with the bot) | the spreadsheet (CSV) of everything on record |
+
+**The bot also posts on its own** (each can be switched off, see Settings):
+- 🚨 **Hub-hop alert**: when someone already refused or sent away tries another hub, the alert goes to every selected group (and to the group if the log came from a private chat).
+- 🟡 **Readmit reminder**: when a sent-away person's 30 minutes are up: "52 YY 14 may now be readmitted if fit".
+- 🌙 **End-of-night summary** at 23:30 (only if anything was logged that night).
 | a log for a seat already flagged at another hub | 🚨 ALREADY REFUSED … second attempt, ⛔ do not admit |
 
 The bot asks for anything missing, one question at a time, with numbered options:
@@ -107,6 +116,7 @@ It takes about 5–10 minutes the first time. At the end it prints the **admin k
 | `gk-log` | The last lines of the bot's log (`[linked-wa]` lines show the WhatsApp connection) |
 | `gk-stop` / `gk-start` | Stop / start it |
 | `gk-update` | Get the latest version and restart; records and the WhatsApp link are kept |
+| `gk-set` | Show the settings; `gk-set SUMMARY_TIME 22:45` changes one and restarts (see Settings below) |
 
 The bot restarts by itself if it crashes, and after the phone reboots (thanks to Termux:Boot). Records, photos and the link are kept in `~/gatekeeper-data` on the phone.
 
@@ -164,7 +174,7 @@ Then show your colleagues the table at the top of this page.
 ## Keeping the ban risk down
 
 - **One group only**, and keep the spare number out of other groups.
-- **Leave alerts off** (`WA_LINKED_POST_ALERTS=false`, the default). The bot then only ever replies to stewards and never posts first.
+- **Keep the bot's own posts few.** It posts unprompted only for hub-hop alerts, readmit reminders and the nightly summary. If you're worried about the number being banned, switch the reminders off first (`WA_READMIT_REMINDERS=off`); they're the most frequent. Leave `WA_LINKED_POST_ALERTS` off (the default).
 - The bot already ignores ordinary chat and random photos, and paces its replies.
 - **Keep the spare phone charged and online now and then.** Linked devices are dropped if the main phone is offline for about 14 days.
 - **Tell your colleagues** a bot is in the group and that it reads seat checks and logs.
@@ -192,3 +202,8 @@ Then show your colleagues the table at the top of this page.
 | `RETENTION_HOURS` | `24` | Records and photos older than this are deleted. |
 | `COOL_OFF_MINUTES` | `30` | Length of a "sent away" cool-off. |
 | `TZ_DISPLAY` | `Europe/London` | Time zone used in replies. |
+| `WA_HUBHOP_ALERTS` | on | 🚨 Post hub-hop alerts to the selected groups. `off` to stop. |
+| `WA_READMIT_REMINDERS` | on | 🟡 Post when a sent-away person may come back. `off` to stop. |
+| `SUMMARY_TIME` | `23:30` | 🌙 Time of the end-of-night summary (`HH:MM`), or `off`. |
+
+On the Android phone, change these with `gk-set`, e.g. `gk-set SUMMARY_TIME 22:45` or `gk-set WA_READMIT_REMINDERS off`. On Render, use the Environment tab.

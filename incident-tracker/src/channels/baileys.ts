@@ -19,7 +19,10 @@ export interface BaileysModule {
   downloadMediaMessage: (msg: WAMessage, type: 'buffer', options: Record<string, unknown>) => Promise<Buffer>;
 }
 
-export type OutgoingContent = { text: string } | { image: Buffer; caption?: string; mimetype?: string };
+export type OutgoingContent =
+  | { text: string }
+  | { image: Buffer; caption?: string; mimetype?: string }
+  | { document: Buffer; mimetype: string; fileName: string };
 
 export interface WAMessage {
   key: { remoteJid?: string | null; fromMe?: boolean | null; id?: string | null; participant?: string | null };

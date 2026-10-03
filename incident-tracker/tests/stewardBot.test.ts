@@ -246,6 +246,56 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
     expect((await bot.handle(msg('dave', '2 -')))[0].text).toContain('✅ Logged');
   });
 
+  it('STATS counts tonight by status, reason and hub', async () => {
+    await bot.handle(msg('dave', 'REFUSED 313 H 02 West 1 2 M 3 2 adult green hat'));
+    await bot.handle(msg('dave', '30 52 YY 14 West 1 -'));
+    await bot.handle(msg('priya', '30 52 YY 14 East 1 -')); // hub-hop
+    await bot.handle(msg('sarah', 'REFUSED 9 B 9 South 4 F 1 1 minor -'));
+    const [r] = await bot.handle(msg('sarah', 'stats'));
+    expect(r.text).toContain('3 logged · 🔴 2 refused · 🟠 1 sent away now');
+    expect(r.text).toContain('🚨 1 tried another hub (1 attempts)');
+    expect(r.text).toContain('*Reasons:* Intoxicated 2 · Abusive 1 · Intoxicated minor 1');
+    expect(r.text).toContain('*Hubs:* West 2 · South 1');
+    expect(r.text).toContain('*Minors:* 1');
+  });
+
+  it('CLEAR lets someone in and PHOTO adds a picture to a saved record', async () => {
+    await bot.handle(msg('dave', 'REFUSED 313 H 02 West 1 -'));
+    expect((await bot.handle(msg('sarah', 'CLEAR 1 2 3')))[0].text).toContain('Nothing on record for *1 2 3*');
+    const [c] = await bot.handle(msg('sarah', 'clear 313 h 02'));
+    expect(c.text).toContain('🟢 *313 H 02* cleared by Sarah');
+    expect((await bot.handle(msg('sarah', '313 H 02')))[0].text).toContain('🟢 *ADMITTED*');
+    expect((await bot.handle(msg('sarah', 'CLEAR 313 H 02')))[0].text).toContain('already cleared');
+
+    const photo = await plainPhoto();
+    expect((await bot.handle(msg('dave', 'PHOTO 313 H 02')))[0].text).toContain('Send the customer');
+    const [p] = await bot.handle(msg('dave', 'PHOTO 313 H 02', { image: { data: photo, mime: 'image/png' } }));
+    expect(p.text).toContain('📷 Photo added to *313 H 02*');
+    expect((await bot.handle(msg('sarah', '313 H 02')))[0].image?.data.equals(photo)).toBe(true);
+  });
+
+  it('REPORT sends the spreadsheet only in a private chat', async () => {
+    await bot.handle(msg('dave', 'REFUSED 313 H 02 West 1 -'));
+    const [g] = await bot.handle(msg('dave', 'REPORT'));
+    expect(g.text).toContain('private chat');
+    expect(g.document).toBeUndefined();
+    const [d] = await bot.handle(msg('dave', 'report', { chatId: '447700900111@s.whatsapp.net' }));
+    expect(d.document?.fileName).toMatch(/^gatekeeper-.*\.csv$/);
+    expect(d.document?.data.toString('utf8')).toContain('313,H,02,Refused,Intoxicated');
+  });
+
+  it('announces a hub-hop to the other chats', async () => {
+    const posts: Array<{ text: string; except?: string }> = [];
+    bot.announce = (text, except) => posts.push({ text, except });
+    await bot.handle(msg('dave', '30 52 YY 14 West 1 -'));
+    expect(posts).toEqual([]);
+    await bot.handle(msg('priya', '30 52 YY 14 East 1 -', { chatId: '447700900222@s.whatsapp.net' }));
+    expect(posts).toHaveLength(1);
+    expect(posts[0].except).toBe('447700900222@s.whatsapp.net');
+    expect(posts[0].text).toContain('🚨 *ALREADY SENT AWAY* · 52 YY 14');
+    expect(posts[0].text).toContain('Logged by Priya');
+  });
+
   it('starts a log with LOG or a photo captioned with the seat, asking every question', async () => {
     const [a] = await bot.handle(msg('dave', 'log'));
     expect(a.text).toContain('Refused entry, or sent away');
