@@ -1,8 +1,8 @@
 import { getSetting, setSetting } from '../channels/pgAuthState';
 
 /**
- * Options stewards (or the AI) add on the fly: a reason, height or build that isn't on the fixed
- * lists is accepted and offered next time as a numbered option, after the fixed ones. Kept in
+ * Words stewards (or the AI) use that aren't on the fixed lists: a new reason, height or build is
+ * accepted and remembered in the background, so it's recognised next time (never shown or numbered). Kept in
  * app_settings so it survives restarts; never duplicated (case-insensitive).
  */
 

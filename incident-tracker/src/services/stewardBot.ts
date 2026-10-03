@@ -73,14 +73,10 @@ export function parseHub(word: string): Hub | null {
 }
 
 export const REASONS = ['Intoxicated', 'Abusive', 'Under the influence', 'Intoxicated minor', 'Found in possession', 'Other'] as const;
-export type Reason = string; // a fixed reason, or one a steward added (customOptions)
+export type Reason = string; // a fixed reason, or a word the bot learnt (customOptions)
 
-/** Fixed options first, then the ones stewards added (numbered after them). */
-export const allReasons = (): string[] => [...REASONS, ...customOptions().reasons];
-export const allHeights = (): string[] => [...HEIGHTS, ...customOptions().heights];
-export const allBuilds = (): string[] => [...BUILDS, ...customOptions().builds];
 const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-/** Added options are matched by their exact words too. */
+/** Words learnt in the background are recognised when typed, but never shown or numbered. */
 const customWords = (terms: string[]): Array<[RegExp, string]> => terms.map((t) => [new RegExp(`^\\s*${escapeRe(t)}(?=[\\s,.:;&]|$)`, 'i'), t]);
 export const HEIGHTS = ['Short', 'Average height', 'Tall'] as const;
 export const BUILDS = ['Slim', 'Average build', 'Heavy'] as const;
@@ -112,7 +108,7 @@ const after = (s: string, used: number) => s.slice(used).replace(SEP, '');
 
 /** "1 3 5", "1,3,5", "135", "drunk & abusive" -> every reason given, in order, without repeats. */
 function takeReasons(s: string): Take<Reason[]> {
-  const list = allReasons();
+  const list = REASONS;
   const out: Reason[] = [];
   const add = (r: Reason) => !out.includes(r) && out.push(r);
   const words = [...REASON_WORDS, ...customWords(customOptions().reasons)];
@@ -200,11 +196,11 @@ export function parseDetails(text: string, from: DetailField = 'reasons'): Detai
     if (g) [out.gender, s] = g;
   }
   if (at('height')) {
-    const h = takeOption(s, allHeights(), [...HEIGHT_WORDS, ...customWords(customOptions().heights)], from === 'height' || out.gender !== undefined);
+    const h = takeOption(s, HEIGHTS, [...HEIGHT_WORDS, ...customWords(customOptions().heights)], from === 'height' || out.gender !== undefined);
     if (h) [out.height, s] = h;
   }
   if (at('build')) {
-    const b = takeOption(s, allBuilds(), [...BUILD_WORDS, ...customWords(customOptions().builds)], from === 'build' || out.height !== undefined);
+    const b = takeOption(s, BUILDS, [...BUILD_WORDS, ...customWords(customOptions().builds)], from === 'build' || out.height !== undefined);
     if (b) [out.build, s] = b;
   }
   if (at('age')) {
@@ -436,15 +432,10 @@ export class StewardBot {
       return `${PROMPTS.choose}\n${list}\n_*CANCEL* to stop_`;
     }
     if (field === 'confirm') return `${draftSummary(p)}\n${PROMPTS.confirm}\n_After saving you can still change it with *EDIT ${p.section} ${p.row} ${p.seat}*._`;
-    // Reasons, heights and builds include the options stewards added.
     let text =
       field === 'reasons'
-        ? `Reason? Reply with a number:\n${numbered(allReasons())}\n_More than one? Send all the numbers, e.g. *1 3 5*. Something else? Type it in a few words._`
-        : field === 'height'
-          ? `Height? Reply with a number:\n${numbered(allHeights())}${SKIP}`
-          : field === 'build'
-            ? `Build? Reply with a number:\n${numbered(allBuilds())}${SKIP}`
-            : PROMPTS[field];
+        ? `Reason? Reply with a number:\n${numbered(REASONS)}\n_More than one? Send all the numbers, e.g. *1 3 5*. Something else? Type it in a few words._`
+        : PROMPTS[field];
     if (field === 'hub' && p.reentry) text = text.replace('Which hub are you at?', '🚨 Which hub are they trying to get in at?');
     const shift = field === 'hub' ? this.shiftHub(senderId) : undefined;
     const last = field === 'hub' && !shift ? this.rememberedHub(senderId) : undefined;
@@ -610,10 +601,9 @@ export class StewardBot {
       }
       const answered = this.applyAnswer(p, text);
       if (answered) return this.advance(m, p);
-      // Not one of the options: a short new reason, height or build is accepted and added to the list.
-      if (p.asked === 'reasons' || p.asked === 'height' || p.asked === 'build') {
-        const note = await this.acceptNewTerm(p, p.asked, text);
-        if (note !== null) return this.advance(m, p, note || undefined);
+      // Not one of the options: a short new reason, height or build is accepted (and learnt quietly).
+      if ((p.asked === 'reasons' || p.asked === 'height' || p.asked === 'build') && (await this.acceptNewTerm(p, p.asked, text))) {
+        return this.advance(m, p);
       }
       return [{ text: this.prompt(p.asked ?? this.nextMissing(p) ?? 'reasons', p, m.senderId) }];
     }
@@ -993,19 +983,18 @@ export class StewardBot {
 
   /**
    * "trespassing" as a reason, "muscular" as a build: words that mean an existing option are
-   * mapped to it; anything else short is added to the list (no duplicates). Returns the note to
-   * show ('' if nothing was added), or null if the answer doesn't look like an option.
+   * mapped to it; anything else short is used and remembered in the background (no duplicates, not
+   * shown on the lists), so it's recognised next time. False if the answer doesn't look like an option.
    */
-  private async acceptNewTerm(p: Pending, field: 'reasons' | 'height' | 'build', text: string): Promise<string | null> {
+  private async acceptNewTerm(p: Pending, field: 'reasons' | 'height' | 'build', text: string): Promise<boolean> {
     const parts = field === 'reasons' ? text.split(/\s*(?:,|&|\band\b)\s*/i).filter(Boolean) : [text];
     const terms: Array<{ term: string; kind: OptionKind; known?: string }> = [];
     for (const part of parts) {
       const term = cleanTerm(part);
-      if (!term) return null;
+      if (!term) return false;
       const known = field === 'reasons' ? normReason(term) : field === 'height' ? normHeight(term) : normBuild(term);
       terms.push({ term, kind: field === 'reasons' ? 'reasons' : field === 'height' ? 'heights' : 'builds', known });
     }
-    const added: string[] = [];
     const chosen: string[] = [];
     for (const t of terms) {
       if (t.known) {
@@ -1013,20 +1002,18 @@ export class StewardBot {
         continue;
       }
       const fixed = t.kind === 'reasons' ? REASONS : t.kind === 'heights' ? HEIGHTS : BUILDS;
-      const r = await addCustomOption(t.kind, t.term, fixed);
-      chosen.push(r.term);
-      if (r.added) added.push(`➕ Added *${r.term}* to the ${kindLabel(t.kind)}.`);
+      chosen.push((await addCustomOption(t.kind, t.term, fixed)).term);
     }
     if (field === 'reasons') p.reasons = [...new Set([...(p.reasons ?? []), ...chosen])];
     else p[field] = chosen[0];
-    return added.join(' ');
+    return true;
   }
 
-  /** Adds any reason, height or build the AI read that isn't on the lists yet. */
+  /** Learns (quietly) any reason, height or build the AI read that the bot doesn't know yet. */
   private async addAiTerms(d: { reasons?: string[]; height?: string; build?: string }): Promise<void> {
-    for (const r of d.reasons ?? []) if (!allReasons().includes(r)) await addCustomOption('reasons', r, REASONS);
-    if (d.height && !allHeights().includes(d.height)) await addCustomOption('heights', d.height, HEIGHTS);
-    if (d.build && !allBuilds().includes(d.build)) await addCustomOption('builds', d.build, BUILDS);
+    for (const r of d.reasons ?? []) await addCustomOption('reasons', r, REASONS);
+    if (d.height) await addCustomOption('heights', d.height, HEIGHTS);
+    if (d.build) await addCustomOption('builds', d.build, BUILDS);
   }
 
   private async optionsCommand(m: InboundMessage, remove?: string): Promise<string> {
@@ -1034,18 +1021,18 @@ export class StewardBot {
       const denied = await this.supervisorOnly(m, 'remove options');
       if (denied) return denied;
       const kind = await removeCustomOption(remove);
-      return kind ? `🗑️ Removed *${sanitize(cleanTerm(remove) ?? remove, 40)}* from the ${kindLabel(kind)}.` : `No added option called “${sanitize(remove, 40)}”.`;
+      return kind ? `🗑️ Forgot *${sanitize(cleanTerm(remove) ?? remove, 40)}* (${kindLabel(kind)}).` : `No learnt word “${sanitize(remove, 40)}”.`;
     }
     const c = customOptions();
     const lines: string[] = [];
-    const show = (label: string, fixedCount: number, list: string[]) => {
-      if (list.length) lines.push(`*${label}:* ${list.map((t, i) => `${fixedCount + i + 1} ${t}`).join(' · ')}`);
+    const show = (label: string, list: string[]) => {
+      if (list.length) lines.push(`*${label}:* ${list.join(' · ')}`);
     };
-    show('Reasons', REASONS.length, c.reasons);
-    show('Heights', HEIGHTS.length, c.heights);
-    show('Builds', BUILDS.length, c.builds);
-    if (!lines.length) return 'No new options yet. When a steward types a reason, height or build that isn’t on the list, it’s added here.';
-    return `➕ *Options added by stewards*\n${lines.join('\n')}\n_Admins: *OPTIONS REMOVE* and the word to delete one._`;
+    show('Reasons', c.reasons);
+    show('Heights', c.heights);
+    show('Builds', c.builds);
+    if (!lines.length) return 'No learnt words yet. When a steward types a reason, height or build that isn’t on the list, it’s accepted and remembered here.';
+    return `🧠 *Words the bot has learnt* (recognised when typed, not shown on the lists)\n${lines.join('\n')}\n_Admins: *OPTIONS REMOVE* and the word to forget one._`;
   }
 
   // ---------------------------------------------------------------- HUB, describe, POLICY, ADVICE
@@ -1568,7 +1555,7 @@ export const STEWARD_HELP =
   '*BACK*: change your last answer · *CANCEL*: stop · *UNDO*: remove your last saved record (15 min)\n' +
   '*HUB WEST*: set your hub for the shift (*HUB OFF* to stop)\n' +
   `*Reasons* (one or more, e.g. *1 3 5*): ${REASONS.map((r, i) => `${i + 1} ${r}`).join(' · ')}\n` +
-  'Not on the list? Type it in a few words and it’s added for next time (*OPTIONS* shows what was added).\n\n' +
+  'Not on the list? Type it in a few words: it’s accepted, and recognised next time.\n\n' +
   '*Check:* send the seat, e.g. *52 YY 14* · *313 L*: everyone in section 313 row L · *313*: the whole section\n' +
   '*FIND green hat*: search descriptions\n' +
   '*LIST*: who is refused or sent away now · *STATS*: tonight’s numbers\n\n' +

@@ -22,60 +22,65 @@ describe.skipIf(!HAS_DB)('new options added by stewards (PostgreSQL)', () => {
     await closePool();
   });
 
-  it('accepts a new reason and offers it next time as a numbered option', async () => {
+  it('accepts a new reason quietly and recognises it next time, without adding it to the list', async () => {
     await bot.handle(msg('dave', 'REFUSED 313 YY 56 West'));
     const [a] = await bot.handle(msg('dave', 'trespassing'));
-    expect(a.text).toContain('➕ Added *Trespassing* to the reasons');
+    expect(a.text).not.toContain('Added');
     expect(a.text).toContain('Male or female?');
-    await bot.handle(msg('dave', '-'));
-    await bot.handle(msg('dave', '-'));
-    await bot.handle(msg('dave', '-'));
-    await bot.handle(msg('dave', '-'));
-    await bot.handle(msg('dave', '-'));
+    for (let i = 0; i < 5; i++) await bot.handle(msg('dave', '-'));
     expect((await ticket('56')).reasoning).toBe('Trespassing');
 
     const [b] = await bot.handle(msg('sarah', 'REFUSED 313 YY 57 West'));
-    expect(b.text).toContain('*7* Trespassing');
-    await bot.handle(msg('sarah', '1 7 -'));
+    expect(b.text).not.toContain('Trespassing'); // the visible list stays 1-6
+    expect(b.text).not.toContain('*7*');
+    expect((await bot.handle(msg('sarah', '7')))[0].text).toContain('Reason?'); // 7 isn't an option
+    await bot.handle(msg('sarah', '1 trespassing -')); // the learnt word is recognised
     expect((await ticket('57')).reasoning).toBe('Intoxicated, Trespassing');
   });
 
-  it('never adds duplicates, and maps words that mean an existing option', async () => {
+  it('never stores duplicates, and maps words that mean an existing option', async () => {
     await bot.handle(msg('dave', 'REFUSED 1 A 1 West'));
     await bot.handle(msg('dave', 'trespassing'));
     await bot.handle(msg('dave', 'CANCEL'));
     await bot.handle(msg('dave', 'REFUSED 1 A 2 West'));
-    const [a] = await bot.handle(msg('dave', '  TRESPASSING '));
-    expect(a.text).not.toContain('➕ Added');
+    await bot.handle(msg('dave', '  TRESPASSING '));
     await bot.handle(msg('dave', 'CANCEL'));
     await bot.handle(msg('dave', 'REFUSED 1 A 3 West'));
-    const [b] = await bot.handle(msg('dave', 'drunk'));
-    expect(b.text).not.toContain('➕ Added'); // drunk = Intoxicated
+    await bot.handle(msg('dave', 'drunk')); // = Intoxicated
     const [o] = await bot.handle(msg('dave', 'OPTIONS'));
     expect(o.text.match(/Trespassing/g)).toHaveLength(1);
     expect(o.text).not.toMatch(/Drunk/i);
   });
 
-  it('adds new heights and builds, maps synonyms', async () => {
+  it('learns new heights and builds quietly, maps synonyms', async () => {
     await bot.handle(msg('dave', 'REFUSED 1 A 1 West 1'));
     await bot.handle(msg('dave', 'M'));
-    expect((await bot.handle(msg('dave', 'very short')))[0].text).toContain('Build?'); // = Short, nothing added
+    expect((await bot.handle(msg('dave', 'very short')))[0].text).toContain('Build?'); // = Short
     const [b] = await bot.handle(msg('dave', 'muscular'));
-    expect(b.text).toContain('➕ Added *Muscular* to the builds');
+    expect(b.text).not.toContain('Added');
+    expect(b.text).toContain('Minor or adult?');
     await bot.handle(msg('dave', '1'));
     await bot.handle(msg('dave', '-'));
     expect((await ticket('1')).description).toBe('Male · Short · Muscular · Adult');
     await bot.handle(msg('sarah', 'REFUSED 1 A 2 West 1'));
     await bot.handle(msg('sarah', 'F'));
-    await bot.handle(msg('sarah', '2'));
-    expect((await bot.handle(msg('sarah', 'x')))[0].text).toContain('*4* Muscular');
+    const [h] = await bot.handle(msg('sarah', '2'));
+    expect(h.text).not.toContain('Muscular'); // not shown as an option
+    await bot.handle(msg('sarah', 'MUSCULAR'));
+    await bot.handle(msg('sarah', '1'));
+    await bot.handle(msg('sarah', '-'));
+    expect((await ticket('2')).description).toBe('Female · Average height · Muscular · Adult');
+    // ...and recognised inside a one-line answer too.
+    await bot.handle(msg('sarah', 'REFUSED 1 A 3 West 1'));
+    await bot.handle(msg('sarah', 'F tall muscular adult -'));
+    expect((await ticket('3')).description).toBe('Female · Tall · Muscular · Adult');
   });
 
   it('does not add long or rambling answers', async () => {
     await bot.handle(msg('dave', 'REFUSED 1 A 1 West'));
     const [a] = await bot.handle(msg('dave', 'he was really very rude to the stewards and the police at the gate'));
     expect(a.text).toContain('Reason?'); // asked again
-    expect((await bot.handle(msg('dave', 'OPTIONS')))[0].text).toContain('No new options yet');
+    expect((await bot.handle(msg('dave', 'OPTIONS')))[0].text).toContain('No learnt words yet');
   });
 
   it('keeps new options across restarts, and admins can remove them', async () => {
@@ -85,8 +90,8 @@ describe.skipIf(!HAS_DB)('new options added by stewards (PostgreSQL)', () => {
     fresh.canSupervise = async (id) => id === 'sarah';
     expect((await fresh.handle(msg('dave', 'OPTIONS')))[0].text).toContain('Trespassing');
     expect((await fresh.handle(msg('dave', 'OPTIONS REMOVE Trespassing')))[0].text).toContain('⛔ Only group admins');
-    expect((await fresh.handle(msg('sarah', 'OPTIONS REMOVE trespassing')))[0].text).toContain('Removed *Trespassing*');
-    expect((await fresh.handle(msg('sarah', 'OPTIONS')))[0].text).toContain('No new options yet');
+    expect((await fresh.handle(msg('sarah', 'OPTIONS REMOVE trespassing')))[0].text).toContain('Forgot *Trespassing*');
+    expect((await fresh.handle(msg('sarah', 'OPTIONS')))[0].text).toContain('No learnt words yet');
   });
 
   it('the list itself refuses duplicates and fixed options, whatever the case', async () => {
@@ -107,6 +112,7 @@ describe.skipIf(!HAS_DB)('new options added by stewards (PostgreSQL)', () => {
     await bot.handle(msg('dave', 'REFUSED 1 A 1 West 1'));
     const [a] = await bot.handle(msg('dave', 'tall athletic lad, red top'));
     expect(a.text).toContain('👤 Male · Tall · Athletic · Adult · red top');
+    expect(a.text).not.toContain('Added');
     expect((await bot.handle(msg('dave', 'OPTIONS')))[0].text).toContain('Athletic');
   });
 });
