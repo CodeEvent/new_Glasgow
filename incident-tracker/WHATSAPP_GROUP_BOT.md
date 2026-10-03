@@ -8,6 +8,7 @@ Stewards log and check refused patrons entirely inside your **work WhatsApp grou
 | `30 52 YY 14 West 1 3 M 3 2 adult green hat` (all in one go) | ✅ Logged 🟠 SENT AWAY 30 MIN · 52 YY 14 · back after 19:15 |
 | `52 YY 14` | 🔴 REFUSED … with the reasons, description, who logged it, where and when, plus the photo |
 | `52 YY 14` (nothing logged) | ✅ NOT REFUSED |
+| `LIST` | everyone refused or sent away right now: seat, reasons, hub and time, description, 🚨 if they tried another hub |
 | a log for a seat already flagged at another hub | 🚨 ALREADY REFUSED … second attempt, ⛔ do not admit |
 
 The bot asks for anything missing, one question at a time, with numbered options:

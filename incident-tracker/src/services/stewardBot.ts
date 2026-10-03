@@ -1,4 +1,5 @@
 import { getPool, isConnectivityError } from '../db/pool';
+import { listRecords, type RecordRow } from './adminRecords';
 import { HUBS, type Hub } from '../domain';
 import { parseGroupMessage } from './commandParser';
 import { formatClock, minutesUntil, sanitize } from './format';
@@ -18,7 +19,7 @@ import { getTicketProfile, getTicketProfileBySeat } from './ticketLookup';
  *         then male/female, height, build, minor/adult and clothing.
  *         The time is the message time. The hub is asked every time (last one shown as a hint).
  *  Check: "BB 212 100" -> refused / sent away / not on record, with the photo if there is one.
- *  Also:  BACK (reopen the previous question), UNDO (remove your last new record),
+ *  Also:  LIST (everyone refused or sent away now), BACK (reopen the previous question), UNDO (remove your last new record),
  *         CANCEL (drop a half-finished log), HELP.
  */
 
@@ -344,6 +345,7 @@ export class StewardBot {
     if (/^(back|prev|previous)$/i.test(text)) return p ? [{ text: this.back(p, m.senderId) }] : [];
     if (/^undo$/i.test(text)) return [{ text: await this.undo(m.senderId) }];
     if (/^(help|\?|menu)$/i.test(text)) return [{ text: STEWARD_HELP }];
+    if (/^list$/i.test(text)) return [{ text: await this.list() }];
 
     // ---- images: a ticket QR starts (or feeds) a log; another photo is the customer's picture.
     if (m.image) {
@@ -502,6 +504,49 @@ export class StewardBot {
     return rowCount ? '↩️ Removed your last record.' : 'That record was already gone.';
   }
 
+  // ---------------------------------------------------------------- LIST
+
+  /** Everyone currently refused or sent away, newest first, short enough for one WhatsApp message. */
+  private async list(): Promise<string> {
+    let rows: RecordRow[];
+    try {
+      rows = await listRecords({}, 500);
+    } catch (err) {
+      console.error('[steward-bot] list failed:', (err as Error).message);
+      return '⚠️ Gatekeeper can’t reach its database right now. Try again in a minute.';
+    }
+    const now = new Date(this.now());
+    const refused = rows.filter((r) => r.current_status === 'completely_refused');
+    const away = rows.filter((r) => r.current_status === 'cooling_off' && r.cool_down_until && new Date(r.cool_down_until) > now);
+    if (!refused.length && !away.length) return '✅ Nobody is refused or sent away right now.';
+
+    const MAX = 30;
+    const entry = (r: RecordRow, extra?: string) => {
+      const seat = r.section ? `${r.section} ${r.row_label} ${r.seat_number}` : r.ticket_id;
+      const head = [`• *${sanitize(seat, 40)}*`];
+      if (r.reasoning && r.reasoning !== 'Not provided') head.push(sanitize(r.reasoning, 80));
+      if (r.origin_hub) head.push(`${r.origin_hub.replace(' Hub', '')}${r.origin_at ? ` ${formatClock(r.origin_at)}` : ''}`);
+      if (extra) head.push(extra);
+      if (r.breaches) head.push(`🚨 tried again ×${r.breaches}`);
+      if (r.photos) head.push('📷');
+      const desc = r.description && r.description !== 'Not provided' ? `\n   👤 ${sanitize(r.description, 90)}` : '';
+      return head.join(' · ') + desc;
+    };
+    const section = (title: string, list: RecordRow[], extra?: (r: RecordRow) => string) =>
+      `${title} (${list.length})\n` +
+      list.slice(0, MAX).map((r) => entry(r, extra?.(r))).join('\n') +
+      (list.length > MAX ? `\n_…and ${list.length - MAX} more on the records page_` : '');
+
+    const parts: string[] = [];
+    if (refused.length) parts.push(section('🔴 *REFUSED*', refused));
+    if (away.length) {
+      parts.push(
+        section('🟠 *SENT AWAY*', away, (r) => `back ${formatClock(r.cool_down_until!)} (${minutesUntil(r.cool_down_until!, now)} min)`),
+      );
+    }
+    return `${parts.join('\n\n')}\n\n_Send a seat (e.g. *52 YY 14*) for details and the photo._`;
+  }
+
   // ---------------------------------------------------------------- checking
 
   private async check(cmd: { kind: 'check'; ticketId: string } | { kind: 'check_seat'; section: string; row: string; seat: string; fallbackTicketId?: string }): Promise<OutboundReply> {
@@ -580,7 +625,8 @@ function confirmation(o: ScanOutcome, hub: Hub, p: Pending): string {
 
 export const STEWARD_HELP =
   '🤖 *GATEKEEPER*\n\n' +
-  '*Check a seat:* send section, row, seat, e.g. *52 YY 14*\n\n' +
+  '*Check a seat:* send section, row, seat, e.g. *52 YY 14*\n' +
+  '*LIST*: everyone refused or sent away right now\n\n' +
   '*Log someone:* send *REFUSED 52 YY 14 West* or *30 52 YY 14 West* (sent away 30 min), ' +
   'or a photo of them or their ticket QR with the seat as the caption, or just *LOG*.\n' +
   'I’ll then ask: hub, reasons, male/female, height, build, minor or adult, and what they’re wearing.\n' +

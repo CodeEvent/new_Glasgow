@@ -229,6 +229,23 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
     expect((await bot.handle(msg('dave', '2')))[0].text).toContain('Male or female?'); // gender was forgotten too
   });
 
+  it('LIST shows everyone refused or sent away, newest first', async () => {
+    expect((await bot.handle(msg('sarah', 'list')))[0].text).toContain('Nobody is refused or sent away');
+    await bot.handle(msg('dave', 'REFUSED 313 H 02 West 1 2 M 3 2 adult green hat'));
+    await bot.handle(msg('dave', '30 52 YY 14 South 3 -'));
+    await bot.handle(msg('priya', '30 52 YY 14 East 3 -')); // hub-hop
+    const [r] = await bot.handle(msg('sarah', 'LIST'));
+    expect(r.text).toContain('🔴 *REFUSED* (1)');
+    expect(r.text).toContain('• *313 H 02* · Intoxicated, Abusive · West');
+    expect(r.text).toContain('👤 Male · Tall · Average build · Adult · green hat');
+    expect(r.text).toContain('🟠 *SENT AWAY* (1)');
+    expect(r.text).toMatch(/\*52 YY 14\* · Under the influence · South \d\d:\d\d · back \d\d:\d\d \(30 min\) · 🚨 tried again ×1/);
+    // A half-finished log isn't disturbed by LIST.
+    await bot.handle(msg('dave', 'REFUSED 1 A 1 West'));
+    await bot.handle(msg('dave', 'list'));
+    expect((await bot.handle(msg('dave', '2 -')))[0].text).toContain('✅ Logged');
+  });
+
   it('starts a log with LOG or a photo captioned with the seat, asking every question', async () => {
     const [a] = await bot.handle(msg('dave', 'log'));
     expect(a.text).toContain('Refused entry, or sent away');
