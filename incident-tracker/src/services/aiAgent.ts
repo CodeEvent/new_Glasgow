@@ -3,6 +3,7 @@ import { getConfig } from '../config/env';
 import { HUBS, type Hub } from '../domain';
 import { listRecords, type RecordRow } from './adminRecords';
 import { formatClock } from './format';
+import { cleanTerm } from './customOptions';
 import { currentStats } from './nightReport';
 
 /**
@@ -26,7 +27,7 @@ export interface AiDraft {
   row?: string;
   seat?: string;
   hub?: Hub;
-  reasons?: (typeof REASONS)[number][];
+  reasons?: string[]; // fixed reasons, or new ones the steward used (added to the list)
   otherReason?: string;
   gender?: string;
   height?: string;
@@ -152,8 +153,8 @@ export const DESCRIBE_TOOL: Anthropic.Beta.BetaTool = {
 export function toDescription(input: Record<string, unknown>): DescriptionFields | null {
   const d: DescriptionFields = {
     gender: normGender(input.gender),
-    height: normHeight(input.height),
-    build: normBuild(input.build),
+    height: normHeight(input.height) ?? cleanTerm(String(input.height ?? '')) ?? undefined,
+    build: normBuild(input.build) ?? cleanTerm(String(input.build ?? '')) ?? undefined,
     age: normAge(input.age),
     clothing: str(input.clothing, 300),
   };
@@ -270,7 +271,10 @@ export async function searchRecords(input: Record<string, unknown>, now: Date): 
 export function toDraft(input: Record<string, unknown>): AiDraft | null {
   const said = normDecision(input.decision);
   const decision = said === 'sent_away' ? 'cool_off' : said ? 'refused' : undefined;
-  const reasons = Array.isArray(input.reasons) ? [...new Set(input.reasons.map(normReason).filter((r): r is (typeof REASONS)[number] => !!r))] : [];
+  // Words that mean a fixed reason map to it; anything else short becomes a new option.
+  const reasons = Array.isArray(input.reasons)
+    ? [...new Set(input.reasons.map((r) => normReason(r) ?? cleanTerm(String(r ?? ''))).filter((r): r is string => !!r))]
+    : [];
   const party = Number(input.party_size);
   const section = str(input.section, 6)?.toUpperCase();
   const row = str(input.row, 4)?.toUpperCase();
@@ -284,8 +288,8 @@ export function toDraft(input: Record<string, unknown>): AiDraft | null {
     reasons: reasons.length ? reasons : undefined,
     otherReason: str(input.other_reason, 300),
     gender: normGender(input.gender),
-    height: normHeight(input.height),
-    build: normBuild(input.build),
+    height: normHeight(input.height) ?? cleanTerm(String(input.height ?? '')) ?? undefined,
+    build: normBuild(input.build) ?? cleanTerm(String(input.build ?? '')) ?? undefined,
     age: normAge(input.age),
     clothing: str(input.clothing, 300),
     party: Number.isInteger(party) && party > 1 && party < 100 ? party : undefined,

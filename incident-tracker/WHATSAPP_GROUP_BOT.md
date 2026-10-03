@@ -11,6 +11,8 @@ Stewards log and check refused patrons entirely inside your **work WhatsApp grou
 | `LIST` | everyone refused or sent away right now: seat, reasons, hub and time, description, 🚨 if they tried another hub |
 | `HUB WEST` (or `HUB 2`) | 🏟️ sets your hub for the shift (12 h): no more hub question. `HUB` shows it, `HUB OFF` clears it. For someone **already refused or sent away**, the bot still asks *which hub are they trying to get in at?* |
 | a seat that's already refused/sent away | ⚠️ flagged straight away; the record gets the reason **"Already refused, tried re-entry"** (or "Already sent away, …") plus any new reasons, and 🚨 if it's another hub |
+| a reason, height or build that isn't on the list (e.g. `trespassing`, `muscular`) | ➕ accepted and **added to the list** for next time, numbered after the fixed options. Words that mean an existing option are mapped to it (`drunk` → Intoxicated, `very tall` → Tall). Never duplicated. The AI's descriptions are added the same way. |
+| `OPTIONS` · `OPTIONS REMOVE trespassing` | show the added options · remove one (group admins) |
 | `STATS` | tonight's numbers: refused, ejected, sent away, cleared, hub-hops, by reason, by hub, minors, people in groups |
 | `313 L` or `234 O` (section and row), `313` or `SECTION 313` (whole section) | 🔎 everyone on record there, in seat order. A bare number only gets a reply if something is on record, so normal chat like "10" is ignored. |
 | `FIND green hat` | searches tonight's descriptions, reasons and notes; for when you see someone but don't know their seat |

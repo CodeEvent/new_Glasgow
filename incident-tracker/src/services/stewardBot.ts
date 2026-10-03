@@ -10,6 +10,8 @@ import { formatClock, minutesUntil, sanitize } from './format';
 import { appendOfflineIncident } from './offlineBuffer';
 import { decodeQrFromImage, ticketCodeFromQr } from './qrImage';
 import { readSeatsFromImage, seatsFromText, type SeatRef } from './ticketOcr';
+import { addCustomOption, cleanTerm, customOptions, kindLabel, refreshCustomOptions, removeCustomOption, type OptionKind } from './customOptions';
+import { normBuild, normHeight, normReason } from './aiAgent';
 import { formatQuickCheck } from './quickCheck';
 import { processScan, scanInputSchema, type ScanOutcome } from './scanService';
 import { getTicketProfile, getTicketProfileBySeat } from './ticketLookup';
@@ -71,7 +73,15 @@ export function parseHub(word: string): Hub | null {
 }
 
 export const REASONS = ['Intoxicated', 'Abusive', 'Under the influence', 'Intoxicated minor', 'Found in possession', 'Other'] as const;
-export type Reason = (typeof REASONS)[number];
+export type Reason = string; // a fixed reason, or one a steward added (customOptions)
+
+/** Fixed options first, then the ones stewards added (numbered after them). */
+export const allReasons = (): string[] => [...REASONS, ...customOptions().reasons];
+export const allHeights = (): string[] => [...HEIGHTS, ...customOptions().heights];
+export const allBuilds = (): string[] => [...BUILDS, ...customOptions().builds];
+const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Added options are matched by their exact words too. */
+const customWords = (terms: string[]): Array<[RegExp, string]> => terms.map((t) => [new RegExp(`^\\s*${escapeRe(t)}(?=[\\s,.:;&]|$)`, 'i'), t]);
 export const HEIGHTS = ['Short', 'Average height', 'Tall'] as const;
 export const BUILDS = ['Slim', 'Average build', 'Heavy'] as const;
 export const AGES = ['Adult', 'Minor (under 18)'] as const;
@@ -102,18 +112,26 @@ const after = (s: string, used: number) => s.slice(used).replace(SEP, '');
 
 /** "1 3 5", "1,3,5", "135", "drunk & abusive" -> every reason given, in order, without repeats. */
 function takeReasons(s: string): Take<Reason[]> {
+  const list = allReasons();
   const out: Reason[] = [];
   const add = (r: Reason) => !out.includes(r) && out.push(r);
+  const words = [...REASON_WORDS, ...customWords(customOptions().reasons)];
   let rest = s;
   for (;;) {
-    const packed = new RegExp(`^\\s*([1-6]{2,6})${END}`).exec(rest); // "135"
-    const n = packed ?? new RegExp(`^\\s*([1-6])${END}`).exec(rest);
-    if (n) {
-      for (const d of n[1]) add(REASONS[Number(d) - 1]);
+    // "135" means 1, 3 and 5 (only while there are 9 options or fewer).
+    const packed = list.length <= 9 ? new RegExp(`^\\s*([1-${list.length}]{2,9})${END}`).exec(rest) : null;
+    if (packed) {
+      for (const d of packed[1]) add(list[Number(d) - 1]);
+      rest = after(rest, packed[0].length);
+      continue;
+    }
+    const n = new RegExp(`^\\s*(\\d{1,2})${END}`).exec(rest);
+    if (n && Number(n[1]) >= 1 && Number(n[1]) <= list.length) {
+      add(list[Number(n[1]) - 1]);
       rest = after(rest, n[0].length);
       continue;
     }
-    const w = REASON_WORDS.find(([re]) => re.test(rest));
+    const w = words.find(([re]) => re.test(rest));
     if (w) {
       add(w[1]);
       rest = after(rest, w[0].exec(rest)![0].length);
@@ -131,8 +149,8 @@ function takeGender(s: string): Take<string> {
 
 /** A numbered option (only where a number can't be mistaken for something else) or one of its words. */
 function takeOption(s: string, options: readonly string[], words: Array<[RegExp, string]>, allowDigit: boolean): Take<string> {
-  const n = allowDigit ? new RegExp(`^\\s*([1-${options.length}])${END}`).exec(s) : null;
-  if (n) return [options[Number(n[1]) - 1], after(s, n[0].length)];
+  const n = allowDigit ? new RegExp(`^\\s*(\\d{1,2})${END}`).exec(s) : null;
+  if (n && Number(n[1]) >= 1 && Number(n[1]) <= options.length) return [options[Number(n[1]) - 1], after(s, n[0].length)];
   for (const [re, v] of words) {
     const m = re.exec(s);
     if (m) return [v, after(s, m[0].length)];
@@ -182,11 +200,11 @@ export function parseDetails(text: string, from: DetailField = 'reasons'): Detai
     if (g) [out.gender, s] = g;
   }
   if (at('height')) {
-    const h = takeOption(s, HEIGHTS, HEIGHT_WORDS, from === 'height' || out.gender !== undefined);
+    const h = takeOption(s, allHeights(), [...HEIGHT_WORDS, ...customWords(customOptions().heights)], from === 'height' || out.gender !== undefined);
     if (h) [out.height, s] = h;
   }
   if (at('build')) {
-    const b = takeOption(s, BUILDS, BUILD_WORDS, from === 'build' || out.height !== undefined);
+    const b = takeOption(s, allBuilds(), [...BUILD_WORDS, ...customWords(customOptions().builds)], from === 'build' || out.height !== undefined);
     if (b) [out.build, s] = b;
   }
   if (at('age')) {
@@ -418,7 +436,15 @@ export class StewardBot {
       return `${PROMPTS.choose}\n${list}\n_*CANCEL* to stop_`;
     }
     if (field === 'confirm') return `${draftSummary(p)}\n${PROMPTS.confirm}\n_After saving you can still change it with *EDIT ${p.section} ${p.row} ${p.seat}*._`;
-    let text = PROMPTS[field];
+    // Reasons, heights and builds include the options stewards added.
+    let text =
+      field === 'reasons'
+        ? `Reason? Reply with a number:\n${numbered(allReasons())}\n_More than one? Send all the numbers, e.g. *1 3 5*. Something else? Type it in a few words._`
+        : field === 'height'
+          ? `Height? Reply with a number:\n${numbered(allHeights())}${SKIP}`
+          : field === 'build'
+            ? `Build? Reply with a number:\n${numbered(allBuilds())}${SKIP}`
+            : PROMPTS[field];
     if (field === 'hub' && p.reentry) text = text.replace('Which hub are you at?', '🚨 Which hub are they trying to get in at?');
     const shift = field === 'hub' ? this.shiftHub(senderId) : undefined;
     const last = field === 'hub' && !shift ? this.rememberedHub(senderId) : undefined;
@@ -444,6 +470,7 @@ export class StewardBot {
 
   /** Handle one incoming message. Returns the replies to post (empty = stay quiet). */
   async handle(m: InboundMessage): Promise<OutboundReply[]> {
+    await refreshCustomOptions(); // options other stewards added
     const text = (m.text ?? '').trim();
     const k = this.key(m);
     let p = this.pending.get(k);
@@ -466,6 +493,8 @@ export class StewardBot {
       if (!this.ai?.handleAudio) return [{ text: '🎙️ Voice notes need the Gemini AI helper. Type it instead, or ask the organiser to set it up.' }];
       return this.fromAi(m, k, await this.ai.handleAudio(m.audio.data, m.audio.mime, m.senderId));
     }
+    const optionsCmd = /^options(?:\s+remove\s+(.+))?$/i.exec(text);
+    if (optionsCmd) return [{ text: await this.optionsCommand(m, optionsCmd[1]?.trim()) }];
     const hubCmd = /^hub(?:\s+(.+))?$/i.exec(text);
     if (hubCmd) return this.hubCommand(m, k, hubCmd[1]?.trim());
     const policyCmd = /^policy(?:\s+([\s\S]+))?$/i.exec(text);
@@ -581,6 +610,11 @@ export class StewardBot {
       }
       const answered = this.applyAnswer(p, text);
       if (answered) return this.advance(m, p);
+      // Not one of the options: a short new reason, height or build is accepted and added to the list.
+      if (p.asked === 'reasons' || p.asked === 'height' || p.asked === 'build') {
+        const note = await this.acceptNewTerm(p, p.asked, text);
+        if (note !== null) return this.advance(m, p, note || undefined);
+      }
       return [{ text: this.prompt(p.asked ?? this.nextMissing(p) ?? 'reasons', p, m.senderId) }];
     }
 
@@ -936,6 +970,7 @@ export class StewardBot {
       delete p.decision;
       delete p.ejected;
     }
+    await this.addAiTerms(d);
     const intro: string[] = [];
     if (seats?.length) {
       setSeats(p, seats);
@@ -952,6 +987,65 @@ export class StewardBot {
     }
     this.pending.set(k, p);
     return this.advance(m, p, intro.join(' '));
+  }
+
+  // ---------------------------------------------------------------- options stewards add
+
+  /**
+   * "trespassing" as a reason, "muscular" as a build: words that mean an existing option are
+   * mapped to it; anything else short is added to the list (no duplicates). Returns the note to
+   * show ('' if nothing was added), or null if the answer doesn't look like an option.
+   */
+  private async acceptNewTerm(p: Pending, field: 'reasons' | 'height' | 'build', text: string): Promise<string | null> {
+    const parts = field === 'reasons' ? text.split(/\s*(?:,|&|\band\b)\s*/i).filter(Boolean) : [text];
+    const terms: Array<{ term: string; kind: OptionKind; known?: string }> = [];
+    for (const part of parts) {
+      const term = cleanTerm(part);
+      if (!term) return null;
+      const known = field === 'reasons' ? normReason(term) : field === 'height' ? normHeight(term) : normBuild(term);
+      terms.push({ term, kind: field === 'reasons' ? 'reasons' : field === 'height' ? 'heights' : 'builds', known });
+    }
+    const added: string[] = [];
+    const chosen: string[] = [];
+    for (const t of terms) {
+      if (t.known) {
+        chosen.push(t.known);
+        continue;
+      }
+      const fixed = t.kind === 'reasons' ? REASONS : t.kind === 'heights' ? HEIGHTS : BUILDS;
+      const r = await addCustomOption(t.kind, t.term, fixed);
+      chosen.push(r.term);
+      if (r.added) added.push(`➕ Added *${r.term}* to the ${kindLabel(t.kind)}.`);
+    }
+    if (field === 'reasons') p.reasons = [...new Set([...(p.reasons ?? []), ...chosen])];
+    else p[field] = chosen[0];
+    return added.join(' ');
+  }
+
+  /** Adds any reason, height or build the AI read that isn't on the lists yet. */
+  private async addAiTerms(d: { reasons?: string[]; height?: string; build?: string }): Promise<void> {
+    for (const r of d.reasons ?? []) if (!allReasons().includes(r)) await addCustomOption('reasons', r, REASONS);
+    if (d.height && !allHeights().includes(d.height)) await addCustomOption('heights', d.height, HEIGHTS);
+    if (d.build && !allBuilds().includes(d.build)) await addCustomOption('builds', d.build, BUILDS);
+  }
+
+  private async optionsCommand(m: InboundMessage, remove?: string): Promise<string> {
+    if (remove) {
+      const denied = await this.supervisorOnly(m, 'remove options');
+      if (denied) return denied;
+      const kind = await removeCustomOption(remove);
+      return kind ? `🗑️ Removed *${sanitize(cleanTerm(remove) ?? remove, 40)}* from the ${kindLabel(kind)}.` : `No added option called “${sanitize(remove, 40)}”.`;
+    }
+    const c = customOptions();
+    const lines: string[] = [];
+    const show = (label: string, fixedCount: number, list: string[]) => {
+      if (list.length) lines.push(`*${label}:* ${list.map((t, i) => `${fixedCount + i + 1} ${t}`).join(' · ')}`);
+    };
+    show('Reasons', REASONS.length, c.reasons);
+    show('Heights', HEIGHTS.length, c.heights);
+    show('Builds', BUILDS.length, c.builds);
+    if (!lines.length) return 'No new options yet. When a steward types a reason, height or build that isn’t on the list, it’s added here.';
+    return `➕ *Options added by stewards*\n${lines.join('\n')}\n_Admins: *OPTIONS REMOVE* and the word to delete one._`;
   }
 
   // ---------------------------------------------------------------- HUB, describe, POLICY, ADVICE
@@ -998,6 +1092,7 @@ export class StewardBot {
       return;
     }
     for (const f of DESCRIPTION_FIELDS) p[f] = d[f] ?? '';
+    await this.addAiTerms(d);
   }
 
   private policy() {
@@ -1472,7 +1567,8 @@ export const STEWARD_HELP =
   'I’ll then ask: hub, reasons, male/female, height, build, minor or adult, and what they’re wearing.\n' +
   '*BACK*: change your last answer · *CANCEL*: stop · *UNDO*: remove your last saved record (15 min)\n' +
   '*HUB WEST*: set your hub for the shift (*HUB OFF* to stop)\n' +
-  `*Reasons* (one or more, e.g. *1 3 5*): ${REASONS.map((r, i) => `${i + 1} ${r}`).join(' · ')}\n\n` +
+  `*Reasons* (one or more, e.g. *1 3 5*): ${REASONS.map((r, i) => `${i + 1} ${r}`).join(' · ')}\n` +
+  'Not on the list? Type it in a few words and it’s added for next time (*OPTIONS* shows what was added).\n\n' +
   '*Check:* send the seat, e.g. *52 YY 14* · *313 L*: everyone in section 313 row L · *313*: the whole section\n' +
   '*FIND green hat*: search descriptions\n' +
   '*LIST*: who is refused or sent away now · *STATS*: tonight’s numbers\n\n' +

@@ -146,7 +146,7 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
     expect(d.text).toContain('Reason?');
     expect(d.text).toContain('*4* Intoxicated minor');
     expect(d.text).toContain('e.g. *1 3 5*');
-    expect((await bot.handle(msg('dave', 'stumbling')))[0].text).toContain('Reason?'); // not an option: asked again
+    expect((await bot.handle(msg('dave', '9')))[0].text).toContain('Reason?'); // not an option number: asked again
     expect((await bot.handle(msg('dave', '3 5')))[0].text).toContain('Male or female?');
     expect((await bot.handle(msg('dave', 'm')))[0].text).toContain('Height?');
     expect((await bot.handle(msg('dave', '3')))[0].text).toContain('Build?');

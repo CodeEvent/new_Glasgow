@@ -150,7 +150,22 @@ curl -fsS -X POST "http://127.0.0.1:$PORT/admin/api/demo/reset" \\
   -H "x-admin-key: \$(cat "$DATA/admin-key.txt")" -H 'Content-Type: application/json' \\
   -d "{\"confirm\":\"DELETE ALL\",\"demo\":\$DEMO}" && echo || echo "Failed: is Gatekeeper running? (gk-status)"
 EOF
-chmod +x "$BIN"/gk-start "$BIN"/gk-stop "$BIN"/gk-status "$BIN"/gk-key "$BIN"/gk-log "$BIN"/gk-update "$BIN"/gk-set "$BIN"/gk-demo
+cat > "$BIN/gk-unset" <<EOF
+#!/data/data/com.termux/files/usr/bin/bash
+# gk-unset GEMINI_API_KEY   remove a setting (back to its default) and restart the bot
+F="$DATA/settings.env"
+[ \$# -eq 1 ] || { echo "Usage: gk-unset NAME   (see the names with gk-set)"; exit 1; }
+if [ -f "\$F" ] && grep -q "^\$1=" "\$F"; then
+  grep -v "^\$1=" "\$F" > "\$F.tmp" || true
+  mv "\$F.tmp" "\$F"; chmod 600 "\$F"
+  echo "Removed \$1. Restarting…"
+  gk-stop >/dev/null
+  gk-start
+else
+  echo "\$1 isn't set."
+fi
+EOF
+chmod +x "$BIN"/gk-start "$BIN"/gk-stop "$BIN"/gk-status "$BIN"/gk-key "$BIN"/gk-log "$BIN"/gk-update "$BIN"/gk-set "$BIN"/gk-demo "$BIN"/gk-unset
 
 # ---- start again after the phone restarts (needs the Termux:Boot app, opened once)
 mkdir -p "$HOME/.termux/boot"
@@ -170,5 +185,5 @@ Next:
   2. Paste the admin key above, then link the WhatsApp phone (scan the QR, or use "Get code").
   3. Tick your work group, Save, Send test.
 
-Commands: gk-status · gk-key · gk-log · gk-stop · gk-start · gk-update · gk-set · gk-demo
+Commands: gk-status · gk-key · gk-log · gk-stop · gk-start · gk-update · gk-set · gk-unset · gk-demo
 EOF
