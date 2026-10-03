@@ -311,7 +311,7 @@ export function takeExtraSeats(first: string, text: string, bare: boolean): { se
 
 // ---------------------------------------------------------------- conversation state
 
-type Field = 'decision' | 'choose' | 'seat' | 'hub' | 'reasons' | 'other' | 'describe' | 'gender' | 'height' | 'build' | 'age' | 'clothing' | 'confirm';
+type Field = 'decision' | 'choose' | 'seat' | 'hub' | 'reasons' | 'other' | 'gender' | 'height' | 'build' | 'age' | 'clothing' | 'confirm';
 
 interface Pending extends ParsedLog {
   editTicketId?: string; // EDIT: re-asking the details of a saved record
@@ -320,7 +320,6 @@ interface Pending extends ParsedLog {
   aiDraft?: boolean; // filled in by the AI helper: the steward must confirm before saving
   confirmed?: boolean;
   seatLookedUp?: string; // seat already checked against existing records (warned once)
-  describeFallback?: boolean; // the AI couldn't read the description: ask the numbered questions
   reentry?: boolean; // the seat is already refused or sent away: this is a re-entry attempt
   otherReason?: string; // what happened, when "Other" is one of the reasons ('' = skipped)
   ticketCode?: string;
@@ -371,8 +370,6 @@ const PROMPTS: Record<Field, string> = {
   clothing: 'What are they wearing? e.g. *green hat, black jacket*. Reply *-* to skip.',
   confirm: 'Reply *YES* to save it, or *CANCEL*.', // the summary is added in prompt()
   choose: 'Which seats? Reply with the numbers, e.g. *1 3*, or *ALL*:', // the list is added in prompt()
-  describe:
-    'Describe them in your own words: male/female, height, build, age, clothing.\ne.g. *tall heavy lad about 20, green hat, black jacket*\n_(*-* to skip)_',
 };
 
 export class StewardBot {
@@ -595,12 +592,10 @@ export class StewardBot {
           return [check, { text: still }];
         }
       }
-      if (p.asked === 'describe') {
-        await this.answerDescribe(p, text, m.senderId);
-        return this.advance(m, p);
-      }
       const answered = this.applyAnswer(p, text);
       if (answered) return this.advance(m, p);
+      // A sentence instead of M/F ("tall heavy lad about 20"): the AI fills in what it can.
+      if (p.asked === 'gender' && (await this.describeWithAi(p, text, m.senderId))) return this.advance(m, p);
       // Not one of the options: a short new reason, height or build is accepted (and learnt quietly).
       if ((p.asked === 'reasons' || p.asked === 'height' || p.asked === 'build') && (await this.acceptNewTerm(p, p.asked, text))) {
         return this.advance(m, p);
@@ -706,8 +701,6 @@ export class StewardBot {
     if (!p.hub) return 'hub';
     if (!p.reasons?.length) return 'reasons';
     if (p.reasons.includes('Other') && p.otherReason === undefined) return 'other';
-    // With the AI on, one free-text question replaces the five numbered ones.
-    if (this.ai?.describe && !p.describeFallback && DESCRIPTION_FIELDS.every((f) => p[f] === undefined)) return 'describe';
     for (const f of DESCRIPTION_FIELDS) if (p[f] === undefined) return f;
     if (p.aiDraft && !p.confirmed) return 'confirm';
     return null;
@@ -1035,7 +1028,7 @@ export class StewardBot {
     return `🧠 *Words the bot has learnt* (recognised when typed, not shown on the lists)\n${lines.join('\n')}\n_Admins: *OPTIONS REMOVE* and the word to forget one._`;
   }
 
-  // ---------------------------------------------------------------- HUB, describe, POLICY, ADVICE
+  // ---------------------------------------------------------------- HUB, AI description, POLICY, ADVICE
 
   private async hubCommand(m: InboundMessage, k: string, arg?: string): Promise<OutboundReply[]> {
     if (!arg) {
@@ -1062,24 +1055,18 @@ export class StewardBot {
     return [{ text }];
   }
 
-  /** "Describe them": short codes are read here; plain words go to the AI; numbered questions if it can't. */
-  private async answerDescribe(p: Pending, text: string, senderId: string): Promise<void> {
-    if (/^[-–—]+$/.test(text)) {
-      for (const f of DESCRIPTION_FIELDS) p[f] = '';
-      return;
-    }
-    const local = parseDetails(text, 'gender');
-    if (local.gender !== undefined) {
-      for (const f of DESCRIPTION_FIELDS) p[f] = local[f] ?? '';
-      return;
-    }
-    const d = this.ai?.describe ? await this.ai.describe(text, senderId).catch(() => null) : null;
-    if (!d) {
-      p.describeFallback = true;
-      return;
-    }
-    for (const f of DESCRIPTION_FIELDS) p[f] = d[f] ?? '';
+  /**
+   * A description typed in words at "Male or female?": the AI reads it and fills in the fields it
+   * found; the questions for the rest are still asked. False if there's no AI or it couldn't read it.
+   */
+  private async describeWithAi(p: Pending, text: string, senderId: string): Promise<boolean> {
+    if (!this.ai?.describe || text.trim().split(/\s+/).length < 2) return false;
+    const d = await this.ai.describe(text, senderId).catch(() => null);
+    if (!d || DESCRIPTION_FIELDS.every((f) => !d[f])) return false;
+    for (const f of DESCRIPTION_FIELDS) if (d[f]) p[f] = d[f];
+    p.gender ??= ''; // described, but not said: don't ask again
     await this.addAiTerms(d);
+    return true;
   }
 
   private policy() {

@@ -80,7 +80,7 @@ Ordinary group chat is never sent to the AI: only messages starting with `GK`, @
 
 ### Faster reporting with the AI on
 
-- **One description question:** instead of five numbered questions, *Describe them*: `tall heavy lad about 20, green hat` (short codes like `M 3 2 adult green hat` still work, `-` skips). If the AI is busy, the numbered questions come back.
+- **Description in a sentence:** the five questions (male/female, height, build, minor/adult, clothing) are always asked one at a time. At *Male or female?* you can type a sentence instead, e.g. `tall heavy lad about 20, green hat`: the AI fills in what it understood and only the missing questions are asked. Short codes like `M 3 2 adult green hat` and `-` (skip) need no AI. If the AI can't read it, *Male or female?* is asked again.
 - **Ticket photo + a few words:** photo of the ticket captioned `drunk, swearing, tall lad green hat, West`. The seat is read **on the phone**; only the words go to the AI. You confirm with **YES**.
 - **Voice notes** (private chat with the bot only, under a minute): say *"Refused, 101 A 4, very drunk and abusive, tall guy in a blue cap, South hub"*, then **YES**. The recording goes to Google; voice notes in the group are never downloaded.
 - **Advice from your policy:** an admin sends `POLICY Refuse if aggressive or can't stand; 30 minutes if mildly drunk and calm…`; stewards send `ADVICE slurring, unsteady, polite`. When a plain-English report doesn't say refused or sent away, the bot shows the policy suggestion and **asks**; the AI never decides that for you.

@@ -66,14 +66,34 @@ describe.skipIf(!HAS_DB)('faster reporting (PostgreSQL)', () => {
     });
   });
 
-  describe('one description question', () => {
-    it('asks once and lets the AI fill in the fields', async () => {
-      const { ai, calls } = fakeAi({ describe: async () => ({ gender: 'Male', height: 'Tall', build: 'Heavy', age: 'Adult', clothing: 'green hat' }) });
+  describe('description questions with the AI on', () => {
+    it('asks male/female, height, build, minor/adult and clothing one at a time (no "describe them")', async () => {
+      const { ai, calls } = fakeAi();
       bot.ai = ai;
-      const [a] = await bot.handle(msg('dave', 'REFUSED 313 YY 56 West 1'));
-      expect(a.text).toContain('Describe them');
-      const [b] = await bot.handle(msg('dave', 'tall heavy lad about 20, green hat'));
-      expect(b.text).toContain('👤 Male · Tall · Heavy · Adult · green hat');
+      const steps: Array<[string, string]> = [
+        ['REFUSED 313 YY 56 West 1 2', 'Male or female?'],
+        ['M', 'Height?'],
+        ['3', 'Build?'],
+        ['2', 'Minor or adult?'],
+        ['1', 'What are they wearing?'],
+        ['green hat, black jacket', '✅ Logged'],
+      ];
+      for (const [say, expected] of steps) {
+        const [r] = await bot.handle(msg('dave', say));
+        expect(r.text).toContain(expected);
+        expect(r.text).not.toContain('Describe them');
+      }
+      expect((await tickets())[0].description).toBe('Male · Tall · Average build · Adult · green hat, black jacket');
+      expect(calls.filter((c) => c.fn === 'describe')).toHaveLength(0);
+    });
+
+    it('a sentence at "Male or female?" is read by the AI, then only what’s missing is asked', async () => {
+      const { ai, calls } = fakeAi({ describe: async () => ({ gender: 'Male', height: 'Tall', build: 'Heavy', age: 'Adult' }) });
+      bot.ai = ai;
+      expect((await bot.handle(msg('dave', 'REFUSED 313 YY 56 West 1')))[0].text).toContain('Male or female?');
+      const [b] = await bot.handle(msg('dave', 'tall heavy lad about 20'));
+      expect(b.text).toContain('What are they wearing?');
+      expect((await bot.handle(msg('dave', 'green hat')))[0].text).toContain('👤 Male · Tall · Heavy · Adult · green hat');
       expect(calls.filter((c) => c.fn === 'describe')).toHaveLength(1);
     });
 
@@ -81,13 +101,14 @@ describe.skipIf(!HAS_DB)('faster reporting (PostgreSQL)', () => {
       const { ai, calls } = fakeAi();
       bot.ai = ai;
       await bot.handle(msg('dave', 'REFUSED 313 YY 56 West 1'));
-      expect((await bot.handle(msg('dave', '-')))[0].text).toContain('✅ Logged');
+      expect((await bot.handle(msg('dave', '-')))[0].text).toContain('Height?'); // skips just that question
+      await bot.handle(msg('dave', 'CANCEL'));
       await bot.handle(msg('dave', 'REFUSED 313 YY 57 West 1'));
       expect((await bot.handle(msg('dave', 'M 3 2 adult green hat')))[0].text).toContain('👤 Male · Tall · Average build · Adult · green hat');
       expect(calls.filter((c) => c.fn === 'describe')).toHaveLength(0);
     });
 
-    it('falls back to the numbered questions if the AI can’t help', async () => {
+    it('asks again if the AI can’t read it', async () => {
       const { ai } = fakeAi({ describe: async () => null });
       bot.ai = ai;
       await bot.handle(msg('dave', 'REFUSED 313 YY 56 West 1'));
