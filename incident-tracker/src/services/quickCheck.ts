@@ -43,7 +43,8 @@ export function formatQuickCheck(
 
   const lines = [head];
   if (originLine) lines.push(originLine);
-  lines.push(`👤 ${sanitize(p.description, 200)} · ${partyLabel(p.party_size)}`);
+  const described = p.description && p.description !== 'Not provided';
+  lines.push(`👤 ${described ? `${sanitize(p.description, 200)} · ` : ''}${partyLabel(p.party_size)}`);
   if (p.reasoning && p.reasoning !== 'Not provided') lines.push(`📝 ${sanitize(p.reasoning, 200)}`);
 
   const attempts = p.events.filter((e) => e.action_logged === 'bypass_attempt');

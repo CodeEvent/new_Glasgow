@@ -734,7 +734,7 @@ export class StewardBot {
       p.history ??= [];
       if (p.history[p.history.length - 1]?.field !== missing) p.history.push({ field: missing, before: snapshot(p) });
       const q = this.prompt(missing, p, m.senderId);
-      const ask = intro ? `${intro} ${q}` : q;
+      const ask = intro ? `${intro}${intro.endsWith('\n') ? '' : ' '}${q}` : q;
       return [{ text: warning ? `${warning}\n${ask}` : ask }];
     }
     this.pending.delete(this.key(m));

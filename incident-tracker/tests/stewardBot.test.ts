@@ -364,6 +364,19 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
     expect((await bot.handle(msg('sarah', 'STATS')))[0].text).toContain('*Reasons:* Abusive 2 · Intoxicated 1');
   });
 
+  it('leaves out "Not provided" when there is no description', async () => {
+    await bot.handle(msg('dave', 'REFUSED 313 YY 58 West 1 -'));
+    const [c] = await bot.handle(msg('sarah', '313 YY 58'));
+    expect(c.text).toContain('👤 1 Person');
+    expect(c.text).not.toContain('Not provided');
+  });
+
+  it('starts the EDIT question on its own line, without a stray space', async () => {
+    await bot.handle(msg('dave', 'REFUSED 313 YY 59 West 1 -'));
+    const [e] = await bot.handle(msg('dave', 'EDIT 313 YY 59'));
+    expect(e.text).toContain('as it was.\nReason?');
+  });
+
   it('shows EJECTED when the seat is checked', async () => {
     await bot.handle(msg('dave', 'EJECTED 313 YY 57 West 2 -'));
     const [c] = await bot.handle(msg('sarah', '313 YY 57'));
