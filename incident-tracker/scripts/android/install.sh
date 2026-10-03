@@ -123,16 +123,16 @@ cat > "$BIN/gk-set" <<EOF
 F="$DATA/settings.env"
 touch "\$F"; chmod 600 "\$F"
 # Show settings with the API key hidden.
-if [ \$# -lt 2 ]; then echo "Settings (\$F):"; sed -E "s/^(ANTHROPIC_API_KEY=).*/\\1'(set, hidden)'/" "\$F"; echo "(empty = defaults)"; exit 0; fi
+if [ \$# -lt 2 ]; then echo "Settings (\$F):"; sed -E "s/^((ANTHROPIC|GEMINI)_API_KEY=).*/\\1'(set, hidden)'/" "\$F"; echo "(empty = defaults)"; exit 0; fi
 case "\$1" in
-  SUMMARY_TIME|WA_HUBHOP_ALERTS|WA_READMIT_REMINDERS|WA_SUPERVISOR_ONLY|WA_NIGHTLY_BACKUP|WA_HEALTH_ALERTS|ANTHROPIC_API_KEY|AI_MODEL|AI_DAILY_LIMIT|COOL_OFF_MINUTES|RETENTION_HOURS|TZ_DISPLAY) ;;
-  *) echo "Unknown setting: \$1"; echo "Use one of: SUMMARY_TIME WA_HUBHOP_ALERTS WA_READMIT_REMINDERS WA_SUPERVISOR_ONLY WA_NIGHTLY_BACKUP WA_HEALTH_ALERTS ANTHROPIC_API_KEY AI_MODEL AI_DAILY_LIMIT COOL_OFF_MINUTES RETENTION_HOURS TZ_DISPLAY"; exit 1 ;;
+  SUMMARY_TIME|WA_HUBHOP_ALERTS|WA_READMIT_REMINDERS|WA_SUPERVISOR_ONLY|WA_NIGHTLY_BACKUP|WA_HEALTH_ALERTS|ANTHROPIC_API_KEY|GEMINI_API_KEY|AI_PROVIDER|AI_MODEL|AI_DAILY_LIMIT|COOL_OFF_MINUTES|RETENTION_HOURS|TZ_DISPLAY) ;;
+  *) echo "Unknown setting: \$1"; echo "Use one of: SUMMARY_TIME WA_HUBHOP_ALERTS WA_READMIT_REMINDERS WA_SUPERVISOR_ONLY WA_NIGHTLY_BACKUP WA_HEALTH_ALERTS ANTHROPIC_API_KEY GEMINI_API_KEY AI_PROVIDER AI_MODEL AI_DAILY_LIMIT COOL_OFF_MINUTES RETENTION_HOURS TZ_DISPLAY"; exit 1 ;;
 esac
 case "\$2" in *\'*) echo "Values can't contain quotes."; exit 1 ;; esac
 grep -v "^\$1=" "\$F" > "\$F.tmp" || true
 echo "\$1='\$2'" >> "\$F.tmp"
 mv "\$F.tmp" "\$F"; chmod 600 "\$F"
-if [ "\$1" = ANTHROPIC_API_KEY ]; then echo "Saved the AI key (hidden). Restarting…"; else echo "Saved \$1=\$2. Restarting…"; fi
+if [ "\$1" = ANTHROPIC_API_KEY ] || [ "\$1" = GEMINI_API_KEY ]; then echo "Saved the AI key (hidden). Restarting…"; else echo "Saved \$1=\$2. Restarting…"; fi
 gk-stop >/dev/null
 gk-start
 EOF

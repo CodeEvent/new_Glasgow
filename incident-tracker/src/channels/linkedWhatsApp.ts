@@ -2,7 +2,7 @@ import { getConfig } from '../config/env';
 import { HELP_TEXT, parseGroupMessage } from '../services/commandParser';
 import { formatQuickCheck } from '../services/quickCheck';
 import { getTicketProfile, getTicketProfileBySeat } from '../services/ticketLookup';
-import { AiAgent } from '../services/aiAgent';
+import { createAiAgent } from '../services/aiProvider';
 import { StewardBot } from '../services/stewardBot';
 import { registerAlertSink } from '../services/whatsapp';
 import { loadBaileys, type WAMessage, type WASocket } from './baileys';
@@ -143,10 +143,12 @@ export class LinkedWhatsApp {
     this.stopped = false;
     this.status = 'starting';
     this.groups = await getSetting<GroupRef[]>(GROUPS_SETTING, []);
-    const key = getConfig().ANTHROPIC_API_KEY;
-    if (key && !this.bot.ai) {
-      this.bot.ai = new AiAgent(key);
-      console.log(`[linked-wa] AI helper on (${getConfig().AI_MODEL}, up to ${getConfig().AI_DAILY_LIMIT} messages a day)`);
+    if (!this.bot.ai) {
+      const ai = createAiAgent();
+      if (ai) {
+        this.bot.ai = ai;
+        console.log(`[linked-wa] AI helper on (${ai.model}, up to ${getConfig().AI_DAILY_LIMIT} messages a day)`);
+      }
     }
     if (getConfig().WA_LINKED_POST_ALERTS && !this.unregisterSink) {
       this.unregisterSink = registerAlertSink((body) => this.postToGroups(body));

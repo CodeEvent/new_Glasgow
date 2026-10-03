@@ -65,7 +65,12 @@ const envObject = z.object({
   WA_HEALTH_ALERTS: onByDefault,
   // Optional AI helper (plain-English questions and logs). Off unless a key is set.
   ANTHROPIC_API_KEY: optionalText,
-  AI_MODEL: z.string().trim().default('claude-opus-5-5'),
+  // Free alternative: Google Gemini (free tier). Used first when its key is set.
+  GEMINI_API_KEY: optionalText,
+  // auto = Gemini if GEMINI_API_KEY is set, else Claude if ANTHROPIC_API_KEY is set.
+  AI_PROVIDER: z.enum(['auto', 'gemini', 'claude']).default('auto'),
+  // Model for the chosen provider (default: gemini-flash-latest / claude-opus-5-5).
+  AI_MODEL: optionalText,
   // Most AI messages per day for everyone together (keeps the bill predictable).
   AI_DAILY_LIMIT: z.coerce.number().int().min(0).default(200),
   // End-of-night summary posted to the groups at this time (HH:MM, TZ_DISPLAY), or "off".

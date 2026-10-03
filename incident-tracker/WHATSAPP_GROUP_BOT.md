@@ -57,18 +57,23 @@ Off until you add an API key. Then stewards can:
 - **ask questions**: start with `GK` or @mention the bot, e.g. `GK anyone in a red coat sent away in the last hour?`, `GK how many refused at West?`. In a private chat with the bot, just type.
 - **log in plain English**: `GK refused a drunk lad in a green hat, swearing at staff, 313 YY 56 West`. The bot shows what it understood (*Check this before I save it*) and asks for anything missing. **Nothing is saved until the steward replies YES.**
 
-Ordinary group chat is never sent to the AI: only messages starting with `GK`, @mentions, private chats, and log lines the bot can't read itself (e.g. `refused drunk lad…` without a clear seat).
+Ordinary group chat is never sent to the AI: only messages starting with `GK`, @mentions, private chats, and log lines the bot can't read itself.
 
-**What leaves the phone:** the steward's message and the matching records (seat, status, reasons, description, hub and time, notes). **Never** photos, steward names, phone numbers or ticket/QR codes. The AI can only read records; saving, clearing and deleting stay with the normal commands. Mention in your privacy notice that an AI service (Anthropic) processes refusal descriptions.
+**What leaves the phone:** the steward's message and the matching records (seat, status, reasons, description, hub and time, notes). **Never** photos, steward names, phone numbers or ticket/QR codes. The AI can only read records; saving, clearing and deleting stay with the normal commands. `AI_DAILY_LIMIT` (default 200 a day, 30 per steward per hour) caps use; each call's tokens show in `gk-log` as `[ai] …`.
 
-**Cost:** paid per use by Anthropic (needs a payment card on the account). Each question is a few thousand tokens; at a few dozen a night that's a small amount, and `AI_DAILY_LIMIT` (default 200 messages a day, 30 per steward per hour) caps it. Each call's token count is written to `gk-log` as `[ai] … tokens`. Set a monthly spend limit in the Anthropic Console as well.
+### Free: Google Gemini (recommended to start)
 
-**Set it up:**
-1. Create an account at https://console.anthropic.com, add a payment method and a monthly spend limit, and create an **API key**.
-2. On the Android, in Termux: `gk-set ANTHROPIC_API_KEY <your key>` (it's stored only on the phone and never shown again). The bot restarts; `gk-log` shows `AI helper on`.
+1. On any device, go to **https://aistudio.google.com**, sign in with a Google account, and click **Get API key → Create API key**. No card needed.
+2. On the Android, in Termux: `gk-set GEMINI_API_KEY <your key>` (stored only on the phone, never shown again). `gk-log` shows `AI helper on (gemini-flash-latest, …)`.
 3. Send `HELP` in the group: the AI part is listed at the end.
 
-To switch it off: `gk-set ANTHROPIC_API_KEY off` won't work; instead remove the line: `sed -i '/^ANTHROPIC_API_KEY=/d' ~/gatekeeper-data/settings.env && gk-stop && gk-start`. Lower the cap with `gk-set AI_DAILY_LIMIT 50`.
+**Free tier limits:** Google allows a limited number of requests per minute and per day; when they run out, the bot says the AI is busy and the normal commands keep working. **Privacy:** on the free tier Google may use what's sent to improve its products (and people at Google may review it). The bot only sends descriptions and reasons, never photos or names, but **mention Google as a processor in your privacy notice.** A paid Google plan or Claude avoids this.
+
+### Paid: Claude (Anthropic)
+
+Better answers; paid per use (about 1–3p a question), not used for training. Create a key at https://console.anthropic.com (add a card and a **monthly spend limit**), then `gk-set ANTHROPIC_API_KEY <your key>`. If both keys are set, Gemini is used; switch with `gk-set AI_PROVIDER claude` (or `gemini`, or `auto`).
+
+**Other settings:** `gk-set AI_MODEL gemini-2.5-flash` picks a specific model; `gk-set AI_DAILY_LIMIT 50` lowers the cap. **To switch the AI off:** `sed -i '/_API_KEY=/d' ~/gatekeeper-data/settings.env && gk-stop && gk-start`.
 
 ---
 

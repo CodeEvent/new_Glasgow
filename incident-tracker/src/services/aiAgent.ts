@@ -38,7 +38,7 @@ export interface AiDraft {
 
 export type AiResult = { kind: 'answer'; text: string } | { kind: 'draft'; draft: AiDraft } | { kind: 'error'; text: string };
 
-const SYSTEM = `You are Gatekeeper's assistant inside a WhatsApp group of stadium stewards. Stewards refuse entry to people (usually for intoxication), send them away for 30 minutes to cool off, or eject them from inside. Records are kept by seat: section, row, seat (e.g. "313 YY 56").
+export const SYSTEM = `You are Gatekeeper's assistant inside a WhatsApp group of stadium stewards. Stewards refuse entry to people (usually for intoxication), send them away for 30 minutes to cool off, or eject them from inside. Records are kept by seat: section, row, seat (e.g. "313 YY 56").
 
 You do one of two things per message:
 
@@ -51,7 +51,7 @@ Rules:
 - Never claim you saved, changed or deleted anything: you can't. Saving happens only after the steward confirms the draft.
 - If the message is neither a question about the records nor a log, reply briefly that you can answer questions about tonight's refusals or log someone, and suggest HELP.`;
 
-const TOOLS: Anthropic.Beta.BetaTool[] = [
+export const TOOLS: Anthropic.Beta.BetaTool[] = [
   {
     name: 'search_records',
     description:
@@ -131,7 +131,7 @@ function recordForModel(r: RecordRow, now: Date): string {
 
 const str = (v: unknown, max = 100) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
 
-async function searchRecords(input: Record<string, unknown>, now: Date): Promise<string> {
+export async function searchRecords(input: Record<string, unknown>, now: Date): Promise<string> {
   const hub = HUBS.find((h) => h === input.hub);
   let rows = await listRecords({ q: str(input.text), section: str(input.section, 16), row: str(input.row, 8), hub, breaches: input.tried_another_hub === true }, 500);
   const status = str(input.status);
@@ -142,7 +142,7 @@ async function searchRecords(input: Record<string, unknown>, now: Date): Promise
   return `${rows.length} matching record(s)${rows.length > 30 ? ', newest 30 shown' : ''}:\n` + rows.slice(0, 30).map((r) => recordForModel(r, now)).join('\n');
 }
 
-function toDraft(input: Record<string, unknown>): AiDraft | null {
+export function toDraft(input: Record<string, unknown>): AiDraft | null {
   const decision = input.decision === 'sent_away' ? 'cool_off' : input.decision === 'refused' || input.decision === 'ejected' ? 'refused' : null;
   if (!decision) return null;
   const pick = <T extends string>(v: unknown, options: readonly T[]): T | undefined => options.find((o) => o === v);
@@ -170,23 +170,16 @@ function toDraft(input: Record<string, unknown>): AiDraft | null {
 
 // ---------------------------------------------------------------- the agent
 
-export class AiAgent {
-  private client: Anthropic;
+/** Budget guard shared by every AI provider: per-sender hourly limit and a daily cap for everyone. */
+export class AiBudget {
   private used = new Map<string, number[]>(); // sender -> timestamps (last hour)
   private day = '';
   private dayCount = 0;
 
-  constructor(
-    apiKey: string,
-    private readonly model = getConfig().AI_MODEL,
-    private readonly now: () => number = Date.now,
-    client?: Anthropic,
-  ) {
-    this.client = client ?? new Anthropic({ apiKey, maxRetries: 2, timeout: 60_000 });
-  }
+  constructor(private readonly now: () => number) {}
 
-  /** Budget guard: per-sender hourly limit and a daily cap for everyone. */
-  private allow(senderId: string): string | null {
+  /** null = go ahead; otherwise the message to send instead. */
+  allow(senderId: string): string | null {
     const now = this.now();
     const today = new Date(now).toISOString().slice(0, 10);
     if (today !== this.day) {
@@ -201,9 +194,26 @@ export class AiAgent {
     this.dayCount++;
     return null;
   }
+}
+
+export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5-5';
+
+export class AiAgent {
+  private client: Anthropic;
+  private budget: AiBudget;
+
+  constructor(
+    apiKey: string,
+    readonly model = getConfig().AI_MODEL ?? DEFAULT_CLAUDE_MODEL,
+    private readonly now: () => number = Date.now,
+    client?: Anthropic,
+  ) {
+    this.client = client ?? new Anthropic({ apiKey, maxRetries: 2, timeout: 60_000 });
+    this.budget = new AiBudget(now);
+  }
 
   async handle(text: string, senderId: string): Promise<AiResult> {
-    const limited = this.allow(senderId);
+    const limited = this.budget.allow(senderId);
     if (limited) return { kind: 'error', text: limited };
 
     const now = new Date(this.now());
