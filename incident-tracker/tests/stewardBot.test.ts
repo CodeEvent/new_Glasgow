@@ -1,6 +1,7 @@
 import QRCode from 'qrcode';
 import { Jimp } from 'jimp';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { resetConfigCache } from '../src/config/env';
 import { closePool, getPool } from '../src/db/pool';
 import { decodeQrFromImage, ticketCodeFromQr } from '../src/services/qrImage';
 import { purgeExpired } from '../src/services/retention';
@@ -293,7 +294,12 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
   it('REPORT sends the spreadsheet only in a private chat', async () => {
     await bot.handle(msg('dave', 'REFUSED 313 H 02 West 1 -'));
     const [g] = await bot.handle(msg('dave', 'REPORT'));
-    expect(g.text).toContain('private chat');
+    expect(g.text).toContain('Export CSV'); // private chats are off by default
+    process.env.WA_PRIVATE_CHATS = 'on';
+    resetConfigCache();
+    expect((await bot.handle(msg('dave', 'REPORT')))[0].text).toContain('private chat');
+    delete process.env.WA_PRIVATE_CHATS;
+    resetConfigCache();
     expect(g.document).toBeUndefined();
     const [d] = await bot.handle(msg('dave', 'report', { chatId: '447700900111@s.whatsapp.net' }));
     expect(d.document?.fileName).toMatch(/^gatekeeper-.*\.csv$/);

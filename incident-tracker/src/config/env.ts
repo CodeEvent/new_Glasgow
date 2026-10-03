@@ -30,6 +30,11 @@ const phoneList = z
   );
 
 const optionalText = z.preprocess(blankToUndefined, z.string().trim().optional());
+// Off unless set to on/true/yes/1.
+const offByDefault = z
+  .string()
+  .optional()
+  .transform((v) => ['true', '1', 'yes', 'on'].includes((v ?? '').trim().toLowerCase()));
 // On unless set to false/0/no/off.
 const onByDefault = z
   .string()
@@ -60,6 +65,8 @@ const envObject = z.object({
   WA_READMIT_REMINDERS: onByDefault,
   // CLEAR and REPORT only for WhatsApp admins of a selected group ("off" = anyone in the group).
   WA_SUPERVISOR_ONLY: onByDefault,
+  // Answer private chats with the bot too (off = the bot, and its AI, work in the selected groups only).
+  WA_PRIVATE_CHATS: offByDefault,
   // Private messages to group admins: the CSV at SUMMARY_TIME, and "online" / battery alerts.
   WA_NIGHTLY_BACKUP: onByDefault,
   WA_HEALTH_ALERTS: onByDefault,

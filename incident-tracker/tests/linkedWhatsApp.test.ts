@@ -1,5 +1,6 @@
 import QRCode from 'qrcode';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetConfigCache } from '../src/config/env';
 import { closePool } from '../src/db/pool';
 import { HAS_DB, resetDatabase, tempOfflineLog } from './helpers';
 
@@ -81,6 +82,8 @@ describe.skipIf(!HAS_DB)('linked WhatsApp bot routing (fake socket)', () => {
   beforeEach(async () => {
     tempOfflineLog();
     await resetDatabase();
+    delete process.env.WA_PRIVATE_CHATS; // the default: group only
+    resetConfigCache();
     sent = [];
     wa = new LinkedWhatsApp();
     const internals = wa as unknown as { sock: unknown; status: string };
@@ -93,6 +96,26 @@ describe.skipIf(!HAS_DB)('linked WhatsApp bot routing (fake socket)', () => {
   });
 
   const deliver = (m: ReturnType<typeof waMsg>) => (wa as unknown as { onMessage(m: unknown): void }).onMessage(m);
+  const privateChatsOn = () => {
+    process.env.WA_PRIVATE_CHATS = 'on';
+    resetConfigCache();
+  };
+
+  it('ignores private chats by default: the bot and its AI work in the group only', async () => {
+    let asked = 0;
+    (wa as unknown as { bot: { ai: unknown } }).bot.ai = { handle: async () => (asked++, { kind: 'answer', text: 'x' }), handleAudio: async () => (asked++, { kind: 'answer', text: 'x' }) };
+    media.downloads = 0;
+    deliver(waMsg('447700900111@s.whatsapp.net', { conversation: 'BB 1 2' }));
+    deliver(waMsg('447700900111@s.whatsapp.net', { conversation: 'anyone in a red coat?' }));
+    deliver(waMsg('447700900111@s.whatsapp.net', { audioMessage: { mimetype: 'audio/ogg', seconds: 3 } }));
+    await settle();
+    expect(sent).toEqual([]);
+    expect(asked).toBe(0);
+    expect(media.downloads).toBe(0);
+    deliver(waMsg(GROUP, { conversation: 'BB 1 2' }, { participant: '111@lid' }));
+    await settle();
+    expect(sent[0].content.text).toContain('NOT REFUSED'); // the group still works
+  });
 
   it('logs and checks in the selected group, replying to the steward’s message', async () => {
     deliver(waMsg(GROUP, { conversation: 'REFUSED BB 212 100 West 1 M 2 2 adult very drunk' }, { participant: '111@lid' }));
@@ -124,7 +147,8 @@ describe.skipIf(!HAS_DB)('linked WhatsApp bot routing (fake socket)', () => {
     expect(wa.seenGroups.has('999@g.us')).toBe(true);
   });
 
-  it('answers group members in a private chat', async () => {
+  it('answers group members in a private chat when private chats are on', async () => {
+    privateChatsOn();
     deliver(waMsg('447700900111@s.whatsapp.net', { conversation: 'BB 1 2' }));
     await settle();
     expect(sent[0]).toMatchObject({ jid: '447700900111@s.whatsapp.net' });
@@ -132,6 +156,7 @@ describe.skipIf(!HAS_DB)('linked WhatsApp bot routing (fake socket)', () => {
   });
 
   it('lets only group admins use CLEAR and REPORT', async () => {
+    privateChatsOn();
     deliver(waMsg(GROUP, { conversation: 'REFUSED BB 212 100 West 1 -' }, { participant: '111@lid' }));
     await settle();
     deliver(waMsg(GROUP, { conversation: 'CLEAR BB 212 100' }, { participant: '222@lid' }));
@@ -156,6 +181,7 @@ describe.skipIf(!HAS_DB)('linked WhatsApp bot routing (fake socket)', () => {
   });
 
   it('never downloads media bigger than the limits', async () => {
+    privateChatsOn();
     (wa as unknown as { bot: { ai: unknown } }).bot.ai = {
       handle: async () => ({ kind: 'answer', text: 'x' }),
       handleAudio: async () => ({ kind: 'answer', text: 'heard' }),
@@ -180,6 +206,7 @@ describe.skipIf(!HAS_DB)('linked WhatsApp bot routing (fake socket)', () => {
   });
 
   it('does not download voice notes when the AI can’t listen', async () => {
+    privateChatsOn();
     (wa as unknown as { bot: { ai: unknown } }).bot.ai = { handle: async () => ({ kind: 'answer', text: 'x' }) };
     media.downloads = 0;
     deliver(waMsg('447700900111@s.whatsapp.net', { audioMessage: { mimetype: 'audio/ogg', seconds: 4 } }));
@@ -189,6 +216,7 @@ describe.skipIf(!HAS_DB)('linked WhatsApp bot routing (fake socket)', () => {
   });
 
   it('listens to voice notes only in private chats', async () => {
+    privateChatsOn();
     const heard: Array<{ mime: string; bytes: number }> = [];
     (wa as unknown as { bot: { ai: unknown } }).bot.ai = {
       handle: async () => ({ kind: 'answer', text: 'x' }),

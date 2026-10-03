@@ -317,6 +317,7 @@ export class LinkedWhatsApp {
     if (age > MAX_MESSAGE_AGE_S) {
       return note(`${age}s old, ignored as backlog${age > 600 ? ' (if you just sent it, this device’s clock is wrong: turn on automatic date & time)' : ''}`);
     }
+    if (!isGroup && !getConfig().WA_PRIVATE_CHATS) return note('private chat, ignored (the bot only works in the group)');
     if (isGroup && !this.groups.some((g) => g.jid === jid)) {
       this.seenGroups.set(jid, Date.now());
       return note('group not ticked on the setup page, ignored');

@@ -459,7 +459,7 @@ export class StewardBot {
     }
     if (/^(back|prev|previous)$/i.test(text)) return p ? [{ text: this.back(p, m.senderId) }] : [];
     if (/^undo$/i.test(text)) return [{ text: await this.undo(m.senderId) }];
-    if (/^(help|\?|menu)$/i.test(text)) return [{ text: STEWARD_HELP + (this.ai ? AI_HELP : '') }];
+    if (/^(help|\?|menu)$/i.test(text)) return [{ text: helpText(!!this.ai, getConfig().WA_PRIVATE_CHATS) }];
     // ---- voice notes: private chats only (in a group they could be anyone's chat)
     if (m.audio) {
       if (m.chatId.endsWith('@g.us')) return [];
@@ -1181,7 +1181,11 @@ export class StewardBot {
 
   /** The spreadsheet, only in a private chat (it holds descriptions of everyone logged). */
   private async report(m: InboundMessage): Promise<OutboundReply> {
-    if (m.chatId.endsWith('@g.us')) return { text: 'Send *REPORT* to me in a private chat and I’ll send you the spreadsheet.' };
+    if (m.chatId.endsWith('@g.us')) {
+      return getConfig().WA_PRIVATE_CHATS
+        ? { text: 'Send *REPORT* to me in a private chat and I’ll send you the spreadsheet.' }
+        : { text: '📎 For the spreadsheet, use *Export CSV* on the records page (admins also get it privately every night).' };
+    }
     const denied = await this.supervisorOnly(m, 'get the report');
     if (denied) return { text: denied };
     try {
@@ -1476,6 +1480,18 @@ export const STEWARD_HELP =
   'a photo captioned *PHOTO 52 YY 14* · *EDIT 52 YY 14* (your own log; admins: any)\n' +
   '_Group admins only:_ *CLEAR 52 YY 14* (may enter now) · *REPORT* in a private chat (the spreadsheet)\n\n' +
   '_Records are deleted automatically after 24 hours._';
+
+/** HELP, matching what's switched on (the AI helper, private chats). */
+export function helpText(ai: boolean, privateChats: boolean): string {
+  let help = STEWARD_HELP + (ai ? AI_HELP : '');
+  if (!privateChats) {
+    help = help
+      .replace(' · *REPORT* in a private chat (the spreadsheet)', '')
+      .replace(' In a private chat, just type.', '')
+      .replace(/\n🎙️ \*Voice note\*[^\n]*/, '');
+  }
+  return help;
+}
 
 /** Added to HELP when the AI helper is on. */
 export const AI_HELP =
