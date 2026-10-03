@@ -451,6 +451,13 @@ export class StewardBot {
       return [{ text: this.prompt(p.asked ?? this.nextMissing(p) ?? 'reasons', p, m.senderId) }];
     }
 
+    // ---- part of a seat: "313 L" (section and row), "313" or "SECTION 313"
+    const partial = parsePartialSeat(text);
+    if (partial) {
+      const reply = await this.searchSeats(partial.section, partial.row, partial.explicit);
+      return reply ? [{ text: reply }] : [];
+    }
+
     // ---- a check: "BB 212 100" or "Check TM-…"
     const cmd = parseGroupMessage(text);
     if (!cmd) return [];
@@ -638,6 +645,30 @@ export class StewardBot {
       );
     } catch (err) {
       console.error('[steward-bot] find failed:', (err as Error).message);
+      return '⚠️ Gatekeeper can’t reach its database right now. Try again in a minute.';
+    }
+  }
+
+  /**
+   * Everyone on record in a section, or a section and row. Returns null (stay quiet) for a
+   * bare number with no matches, since "10" in a group chat is usually not a search.
+   */
+  private async searchSeats(section: string, row: string | undefined, explicit: boolean): Promise<string | null> {
+    const where = `section ${section}${row ? `, row ${row}` : ''}`;
+    try {
+      const rows = await listRecords({ section, row }, 200);
+      if (!rows.length) return explicit ? `✅ Nothing on record in ${where}.` : null;
+      const now = new Date(this.now());
+      const sorted = [...rows].sort((a, b) => `${a.row_label}`.localeCompare(`${b.row_label}`, 'en', { numeric: true }) || `${a.seat_number}`.localeCompare(`${b.seat_number}`, 'en', { numeric: true }));
+      const MAX = 20;
+      return (
+        `🔎 *${where[0].toUpperCase()}${where.slice(1)}*: ${rows.length} on record\n` +
+        sorted.slice(0, MAX).map((r) => recordLine(r, statusIcon(r, now))).join('\n') +
+        (rows.length > MAX ? `\n_…and ${rows.length - MAX} more. Add the row to narrow it down._` : '') +
+        `\n_Send the full seat for details and the photo._`
+      );
+    } catch (err) {
+      console.error('[steward-bot] seat search failed:', (err as Error).message);
       return '⚠️ Gatekeeper can’t reach its database right now. Try again in a minute.';
     }
   }
@@ -835,6 +866,25 @@ export class StewardBot {
   }
 }
 
+/**
+ * Part of a seat, for a search: "313 L" / "234 O" (section with a digit, then a lettered row),
+ * "SECTION 313 ROW 12", "SECTION 313", or a bare "313" (explicit=false: reply only on matches).
+ */
+export function parsePartialSeat(text: string): { section: string; row?: string; explicit: boolean } | null {
+  const t = text.trim();
+  let m = /^(?:sec(?:tion)?|block|blk)\.?\s*([a-z0-9]{1,6})(?:\s*[\s/,|]\s*(?:row|rw)\.?\s*([a-z0-9]{1,4}))?$/i.exec(t);
+  if (m) return { section: m[1].toUpperCase(), row: m[2]?.toUpperCase(), explicit: true };
+  m = /^([a-z]{0,3}\d{1,4}[a-z]{0,2})\s*[\s/,|]\s*(?:(row|rw)\.?\s*)?([a-z]{1,3})$/i.exec(t);
+  if (m) {
+    // "5 min", "10 pm", "2 ok" are chat: only answer those if something matches.
+    const chatty = !m[2] && (m[3].length > 2 || /^(ok|am|pm|hr|hrs|min|ya|no|so|go|ye|yh|x)$/i.test(m[3]));
+    return { section: m[1].toUpperCase(), row: m[3].toUpperCase(), explicit: !chatty };
+  }
+  m = /^(\d{1,4}[a-z]?)$/i.exec(t);
+  if (m) return { section: m[1].toUpperCase(), explicit: false };
+  return null;
+}
+
 function statusIcon(r: RecordRow, now: Date): string {
   if (r.current_status === 'admitted') return '🟢';
   if (r.current_status === 'completely_refused') return /^Ejected/.test(r.reasoning) ? '⛔' : '🔴';
@@ -918,7 +968,8 @@ export const STEWARD_HELP =
   'I’ll then ask: hub, reasons, male/female, height, build, minor or adult, and what they’re wearing.\n' +
   '*BACK*: change your last answer · *CANCEL*: stop · *UNDO*: remove your last saved record (15 min)\n' +
   `*Reasons* (one or more, e.g. *1 3 5*): ${REASONS.map((r, i) => `${i + 1} ${r}`).join(' · ')}\n\n` +
-  '*Check:* send the seat, e.g. *52 YY 14* · *FIND green hat*: search descriptions\n' +
+  '*Check:* send the seat, e.g. *52 YY 14* · *313 L*: everyone in section 313 row L · *313*: the whole section\n' +
+  '*FIND green hat*: search descriptions\n' +
   '*LIST*: who is refused or sent away now · *STATS*: tonight’s numbers\n\n' +
   '*Add to a saved record:* *NOTE 52 YY 14 came back calm* · *PARTY 52 YY 14 3* · ' +
   'a photo captioned *PHOTO 52 YY 14* · *EDIT 52 YY 14* (your own log; admins: any)\n' +

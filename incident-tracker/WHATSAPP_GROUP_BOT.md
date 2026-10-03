@@ -10,6 +10,7 @@ Stewards log and check refused patrons entirely inside your **work WhatsApp grou
 | `52 YY 14` (nothing logged) | ✅ NOT REFUSED |
 | `LIST` | everyone refused or sent away right now: seat, reasons, hub and time, description, 🚨 if they tried another hub |
 | `STATS` | tonight's numbers: refused, ejected, sent away, cleared, hub-hops, by reason, by hub, minors, people in groups |
+| `313 L` or `234 O` (section and row), `313` or `SECTION 313` (whole section) | 🔎 everyone on record there, in seat order. A bare number only gets a reply if something is on record, so normal chat like "10" is ignored. |
 | `FIND green hat` | searches tonight's descriptions, reasons and notes; for when you see someone but don't know their seat |
 | `NOTE 52 YY 14 came back calm` | 🗒️ adds a note to a saved record; checks show the latest notes |
 | `PARTY 52 YY 14 3` | 👥 sets the group size. Or add `x3` / `party of 3` to the log line: `REFUSED 52 YY 14 West x3` |

@@ -12,6 +12,8 @@ export interface RecordFilter {
   hub?: Hub; // any log at this hub
   status?: IncidentStatus;
   breaches?: boolean; // only people who tried another hub
+  section?: string; // exact section ("313"), spaces and case ignored
+  row?: string; // exact row within that section ("L")
 }
 
 export interface RecordRow {
@@ -67,9 +69,11 @@ export async function listRecords(f: RecordFilter, limit = 500): Promise<RecordR
         AND ($2::text IS NULL OR EXISTS (SELECT 1 FROM scan_events h WHERE h.ticket_id = t.ticket_id AND h.hub_location::text = $2::text))
         AND ($3::text IS NULL OR t.current_status::text = $3::text)
         AND (NOT $4::boolean OR EXISTS (SELECT 1 FROM scan_events x WHERE x.ticket_id = t.ticket_id AND x.is_breach_event))
+        AND ($6::text IS NULL OR upper(regexp_replace(t.section, '\\s+', '', 'g')) = upper(regexp_replace($6::text, '\\s+', '', 'g')))
+        AND ($7::text IS NULL OR upper(regexp_replace(t.row_label, '\\s+', '', 'g')) = upper(regexp_replace($7::text, '\\s+', '', 'g')))
       ORDER BY t.updated_at DESC
       LIMIT $5`,
-    [f.q ?? null, f.hub ?? null, f.status ?? null, f.breaches ?? false, limit],
+    [f.q ?? null, f.hub ?? null, f.status ?? null, f.breaches ?? false, limit, f.section ?? null, f.row ?? null],
   );
   return rows;
 }

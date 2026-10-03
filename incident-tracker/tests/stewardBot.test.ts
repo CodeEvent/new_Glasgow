@@ -401,6 +401,25 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
     expect((await bot.handle(msg('sarah', '1 A 1')))[0].text).not.toContain('Already on record');
   });
 
+  it('searches by section, or section and row', async () => {
+    await bot.handle(msg('dave', 'REFUSED 313 L 4 West 1 -'));
+    await bot.handle(msg('dave', '30 313 L 12 West 2 -'));
+    await bot.handle(msg('dave', 'REFUSED 313 YY 56 West 3 -'));
+    await bot.handle(msg('dave', 'REFUSED 234 O 9 East 1 -'));
+    const [l] = await bot.handle(msg('sarah', '313 l'));
+    expect(l.text).toContain('🔎 *Section 313, row L*: 2 on record');
+    expect(l.text.indexOf('*313 L 4*')).toBeLessThan(l.text.indexOf('*313 L 12*')); // seat order
+    expect(l.text).toContain('🟠 *313 L 12*');
+    expect((await bot.handle(msg('sarah', '313')))[0].text).toContain('*Section 313*: 3 on record');
+    expect((await bot.handle(msg('sarah', 'section 234 row o')))[0].text).toContain('🔴 *234 O 9*');
+    expect((await bot.handle(msg('sarah', '234 Q')))[0].text).toContain('✅ Nothing on record in section 234, row Q');
+    expect((await bot.handle(msg('sarah', 'SECTION 99')))[0].text).toContain('Nothing on record in section 99');
+    // Chat stays quiet: bare numbers and "5 min" with nothing on record.
+    for (const t of ['10', '5 min', '2 ok', '7 pm']) expect(await bot.handle(msg('sarah', t))).toEqual([]);
+    // Full seats are still checks.
+    expect((await bot.handle(msg('sarah', '313 YY 56')))[0].text).toContain('🔴 *REFUSED*');
+  });
+
   it('starts a log with LOG or a photo captioned with the seat, asking every question', async () => {
     const [a] = await bot.handle(msg('dave', 'log'));
     expect(a.text).toContain('Refused entry, sent away');
