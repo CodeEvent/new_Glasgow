@@ -69,6 +69,7 @@ async function main() {
   console.log(`  2. Admin key ${adminKey}`);
   console.log('  3. Scan the QR with the spare phone (WhatsApp > Linked devices)');
   console.log('  4. Tick your work group, Save, Send test');
+  console.log(`  Records     http://localhost:${port}/admin/records  (see, edit, delete, export)`);
   console.log(`  Data is saved in ${DATA}`);
   console.log('  Keep this window open and the computer awake. Ctrl+C to stop.');
   console.log(`╚${bar}╝\n`);

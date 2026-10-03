@@ -47,6 +47,12 @@ No accounts and no cost. The bot connects out to WhatsApp like WhatsApp Web, so 
 3. **Link the phone.** Open `http://localhost:3000/admin/whatsapp` on the laptop, paste the admin key, and scan the QR with the spare phone (WhatsApp → Settings → Linked devices → Link a device). Then tick your work group, **Save**, **Send test**.
 4. **Leave the terminal window open.** `Ctrl+C` stops the bot. Next time, run `npm run local` again; the phone stays linked.
 
+**See and manage everything logged** at `http://localhost:3000/admin/records` (same admin key; use the port you started with):
+- live list of refused and sent-away people, updating every 5 seconds, with the reason, description, hub, steward, time and photo;
+- search by seat (`52 YY 14`), reason or clothing, and filter by hub, status, or "tried another hub";
+- tap a record to see its history and photos, change it to refused / sent away / admitted, fix the reason or description, or delete it;
+- **Export CSV** for an end-of-night report, before the 24-hour auto-delete.
+
 **Keep the laptop awake** on event days:
 - Plug it in.
 - Ubuntu: Settings → Power → set **Automatic Suspend** to **Off**.

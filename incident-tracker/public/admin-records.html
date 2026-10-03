@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#111418">
+<title>Gatekeeper Records</title>
+<style>
+  :root {
+    --bg: #111418; --panel: #1b2027; --line: #2c333d; --text: #eef1f4; --muted: #9aa4b1;
+    --accent: #2563eb; --amber: #f59e0b; --red: #dc2626; --green: #15803d;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: .02em; }
+  header nav { display: flex; gap: 12px; align-items: center; font-size: 14px; }
+  header a { color: var(--muted); }
+  main { padding: 16px; max-width: 1200px; margin: 0 auto; display: grid; gap: 14px; }
+  section.box { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; gap: 10px; max-width: 560px; }
+  h2 { font-size: 15px; margin: 0; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  label { font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
+  input, select, textarea { width: 100%; padding: 10px 12px; font: inherit; color: var(--text); background: #0d1014; border: 1px solid var(--line); border-radius: 8px; }
+  textarea { min-height: 70px; resize: vertical; }
+  button { font: inherit; border: 0; border-radius: 10px; padding: 10px 14px; cursor: pointer; font-weight: 600; color: #fff; background: var(--accent); white-space: nowrap; }
+  button.secondary { background: #2c333d; }
+  button.danger { background: transparent; border: 1px solid var(--red); color: #fca5a5; }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row > input { flex: 1; min-width: 0; }
+  .muted { color: var(--muted); font-size: 14px; margin: 0; }
+  .msg { border-radius: 8px; padding: 10px 12px; font-size: 14px; }
+  .msg.err { background: #7f1d1d; } .msg.ok { background: #14532d; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; background: #2c333d; }
+  .pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .pill.live { color: #4ade80; } .pill.bad { color: #f87171; } .pill.idle { color: var(--muted); }
+
+  .toolbar { display: grid; grid-template-columns: minmax(0, 2fr) repeat(2, minmax(0, 1fr)) auto auto; gap: 8px; align-items: end; }
+  .toolbar .check { display: flex; gap: 6px; align-items: center; font-size: 14px; color: var(--text); padding: 10px 4px; white-space: nowrap; }
+  .toolbar .check input { width: 18px; height: 18px; }
+  @media (max-width: 760px) { .toolbar { grid-template-columns: 1fr 1fr; } .toolbar .search { grid-column: 1 / -1; } }
+
+  .stats { display: flex; gap: 8px; flex-wrap: wrap; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 14px; color: var(--muted); }
+  .stat b { color: var(--text); font-size: 20px; margin-right: 4px; font-variant-numeric: tabular-nums; }
+
+  .list { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 10px; }
+  .card { text-align: left; font-weight: 400; background: var(--panel); border: 1px solid var(--line); border-left: 5px solid var(--muted); border-radius: 12px; padding: 12px; display: grid; gap: 6px; color: var(--text); white-space: normal; }
+  .card:hover { border-color: #3d4652; }
+  .card.refused { border-left-color: var(--red); } .card.cooling { border-left-color: var(--amber); }
+  .card.ended { border-left-color: #a3a3a3; } .card.admitted { border-left-color: var(--green); }
+  .card .top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .seat { font: 700 20px/1.2 ui-monospace, Menlo, monospace; letter-spacing: .03em; }
+  .status { font-size: 13px; font-weight: 700; white-space: nowrap; }
+  .card .line { font-size: 14px; overflow-wrap: anywhere; }
+  .card .meta { font-size: 13px; color: var(--muted); }
+  .breach { color: #fca5a5; font-weight: 700; font-size: 13px; }
+  .empty { text-align: center; padding: 40px 16px; color: var(--muted); }
+
+  dialog { width: min(640px, calc(100vw - 24px)); max-height: calc(100vh - 24px); padding: 0; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--text); }
+  dialog::backdrop { background: rgba(0, 0, 0, .6); }
+  .dlg { padding: 16px; display: grid; gap: 14px; }
+  .dlg .top { display: flex; justify-content: space-between; align-items: start; gap: 8px; }
+  .photos { display: flex; gap: 8px; overflow-x: auto; }
+  .photos img { height: 180px; border-radius: 8px; border: 1px solid var(--line); background: #0d1014; }
+  .timeline { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 14px; }
+  .timeline li { padding: 8px 10px; background: #0d1014; border-radius: 8px; }
+  .timeline li.breach-ev { background: #3b0d0d; }
+  .seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .seg button { background: #2c333d; padding: 10px 6px; }
+  .seg button.on.refused { background: var(--red); } .seg button.on.cooling { background: #b45309; } .seg button.on.admitted { background: var(--green); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🛡️ Gatekeeper · Records</h1>
+  <nav>
+    <a href="/admin/whatsapp">WhatsApp setup</a>
+    <span class="pill idle" id="pill">Locked</span>
+  </nav>
+</header>
+
+<main>
+  <div class="msg err" id="error" hidden></div>
+  <div class="msg ok" id="notice" hidden></div>
+
+  <section class="box" id="keyBox">
+    <h2>Admin key</h2>
+    <p class="muted">The admin key printed when you start Gatekeeper (or <code>ADMIN_API_KEY</code> on the server).</p>
+    <div class="row">
+      <input id="key" type="password" autocomplete="off" placeholder="Admin key">
+      <button id="unlock">Unlock</button>
+    </div>
+  </section>
+
+  <div id="app" hidden>
+    <div style="display:grid;gap:14px">
+      <div class="toolbar">
+        <label class="search">Search
+          <input id="q" type="search" placeholder="Seat (52 YY 14), reason, clothing…" autocomplete="off">
+        </label>
+        <label>Hub
+          <select id="hub">
+            <option value="">All hubs</option>
+            <option>East Hub</option><option>West Hub</option><option>South Hub</option><option>Hospitality Hub</option>
+          </select>
+        </label>
+        <label>Status
+          <select id="status">
+            <option value="">All</option>
+            <option value="completely_refused">Refused</option>
+            <option value="cooling_off">Sent away</option>
+            <option value="admitted">Admitted</option>
+          </select>
+        </label>
+        <label class="check"><input id="breaches" type="checkbox"> Tried another hub</label>
+        <button class="secondary" id="export">Export CSV</button>
+      </div>
+
+      <div class="stats" id="stats"></div>
+      <div class="list" id="list"></div>
+      <p class="muted" id="footnote">Updates every 5 seconds. Records are deleted automatically 24 hours after their last change.</p>
+    </div>
+  </div>
+</main>
+
+<dialog id="dlg">
+  <div class="dlg">
+    <div class="top">
+      <div>
+        <div class="seat" id="dSeat"></div>
+        <div class="status" id="dStatus"></div>
+      </div>
+      <button class="secondary" id="dClose" aria-label="Close">Close</button>
+    </div>
+    <div class="photos" id="dPhotos"></div>
+
+    <div>
+      <h2 style="margin-bottom:6px">Status</h2>
+      <div class="seg" id="dSeg">
+        <button data-s="completely_refused" class="refused">🔴 Refused</button>
+        <button data-s="cooling_off" class="cooling">🟠 Sent away</button>
+        <button data-s="admitted" class="admitted">🟢 Admitted</button>
+      </div>
+      <p class="muted" style="margin-top:6px">Choosing “Sent away” restarts the cool-off from now.</p>
+    </div>
+
+    <label>Reason
+      <input id="dReason" list="reasons" maxlength="2000">
+      <datalist id="reasons">
+        <option>Intoxicated</option><option>Abusive</option><option>Under the influence</option>
+        <option>Intoxicated minor</option><option>Found in possession</option><option>Other</option>
+      </datalist>
+    </label>
+    <label>Description
+      <textarea id="dDesc" maxlength="2000"></textarea>
+    </label>
+    <div class="row">
+      <button id="dSave">Save changes</button>
+      <span style="flex:1"></span>
+      <button class="danger" id="dDelete">Delete record</button>
+    </div>
+
+    <div>
+      <h2 style="margin-bottom:6px">History</h2>
+      <ul class="timeline" id="dEvents"></ul>
+    </div>
+    <p class="muted" id="dTicket"></p>
+  </div>
+</dialog>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const KEY = 'gk.adminKey'; // shared with the WhatsApp setup page
+  let adminKey = '';
+  try { adminKey = sessionStorage.getItem(KEY) || ''; } catch {}
+  let timer = null;
+  let current = null; // record open in the dialog
+  let photoUrls = [];
+  let lastJson = '';
+
+  const ACTIONS = {
+    initial_refusal: 'Refused', initial_cool_off: 'Sent away 30 min', bypass_attempt: '🚨 Tried again',
+    unauthorized_admission: '🚨 Let in without clearance', cleared_admission: 'Let in after cool-off', repeat_scan: 'Checked again',
+  };
+
+  function flash(kind, text) {
+    const el = $(kind === 'error' ? 'error' : 'notice');
+    el.textContent = text;
+    el.hidden = !text;
+    if (text && kind !== 'error') setTimeout(() => { el.hidden = true; }, 3500);
+  }
+  function setPill(cls, text) { const p = $('pill'); p.className = 'pill ' + cls; p.textContent = text; }
+
+  async function api(path, opts = {}) {
+    const res = await fetch('/admin/api/records' + path, {
+      ...opts,
+      headers: { 'Content-Type': 'application/json', 'x-admin-key': adminKey, ...(opts.headers || {}) },
+    });
+    if (res.status === 401) { lock(); throw new Error('Wrong admin key.'); }
+    return res;
+  }
+  async function json(path, opts) {
+    const res = await api(path, opts);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || body.ok === false) throw new Error(body.error || `Request failed (HTTP ${res.status})`);
+    return body;
+  }
+
+  function lock() {
+    adminKey = '';
+    try { sessionStorage.removeItem(KEY); } catch {}
+    clearInterval(timer);
+    $('app').hidden = true;
+    $('keyBox').hidden = false;
+    setPill('idle', 'Locked');
+  }
+
+  const time = (d) => d ? new Date(d).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
+  const seatOf = (r) => r.section ? `${r.section} ${r.row_label} ${r.seat_number}` : r.ticket_id;
+  const notGiven = (s) => !s || s === 'Not provided';
+
+  function statusOf(r, now) {
+    if (r.current_status === 'completely_refused') return { cls: 'refused', text: '🔴 REFUSED' };
+    if (r.current_status === 'admitted') return { cls: 'admitted', text: '🟢 ADMITTED' };
+    const left = r.cool_down_until ? Math.ceil((new Date(r.cool_down_until) - now) / 60000) : 0;
+    return left > 0
+      ? { cls: 'cooling', text: `🟠 SENT AWAY · ${left} min left` }
+      : { cls: 'ended', text: '🟡 COOL-OFF ENDED' };
+  }
+
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  function query() {
+    const p = new URLSearchParams();
+    if ($('q').value.trim()) p.set('q', $('q').value.trim());
+    if ($('hub').value) p.set('hub', $('hub').value);
+    if ($('status').value) p.set('status', $('status').value);
+    if ($('breaches').checked) p.set('breaches', '1');
+    const s = p.toString();
+    return s ? '?' + s : '';
+  }
+
+  async function load() {
+    try {
+      const body = await json('/' + query());
+      setPill('live', 'Live');
+      flash('error', '');
+      const sig = JSON.stringify(body.records);
+      if (sig === lastJson) return renderStats(body.records, new Date(body.now)); // keep minutes-left fresh
+      lastJson = sig;
+      render(body.records, new Date(body.now));
+    } catch (err) {
+      if (adminKey) { setPill('bad', 'Offline'); flash('error', err.message); }
+    }
+  }
+
+  function renderStats(rows, now) {
+    const s = $('stats');
+    s.replaceChildren();
+    const count = (f) => rows.filter(f).length;
+    const items = [
+      [rows.length, rows.length === 1 ? 'record' : 'records'],
+      [count((r) => r.current_status === 'completely_refused'), 'refused'],
+      [count((r) => statusOf(r, now).cls === 'cooling'), 'sent away now'],
+      [count((r) => r.breaches > 0), 'tried another hub'],
+    ];
+    for (const [n, label] of items) {
+      const d = el('div', 'stat');
+      d.append(el('b', null, String(n)), document.createTextNode(label));
+      s.append(d);
+    }
+    for (const card of $('list').children) {
+      const r = card._record;
+      if (!r) continue;
+      const st = statusOf(r, now);
+      card.className = 'card ' + st.cls;
+      card.querySelector('.status').textContent = st.text;
+    }
+  }
+
+  function render(rows, now) {
+    const list = $('list');
+    list.replaceChildren();
+    if (!rows.length) {
+      list.append(el('div', 'empty', query() ? 'No records match.' : 'Nothing logged yet. Records appear here as stewards log people in WhatsApp.'));
+      list.firstChild.style.gridColumn = '1 / -1';
+    }
+    for (const r of rows) {
+      const st = statusOf(r, now);
+      const card = el('button', 'card ' + st.cls);
+      card.type = 'button';
+      card._record = r;
+      const top = el('div', 'top');
+      top.append(el('span', 'seat', seatOf(r)), el('span', 'status', st.text));
+      card.append(top);
+      if (!notGiven(r.reasoning)) card.append(el('div', 'line', '📝 ' + r.reasoning));
+      if (!notGiven(r.description)) card.append(el('div', 'line', '👤 ' + r.description));
+      const meta = [r.origin_hub, r.origin_steward && 'by ' + r.origin_steward, time(r.origin_at)].filter(Boolean).join(' · ');
+      card.append(el('div', 'meta', meta + (r.photos ? ` · 📷 ${r.photos}` : '')));
+      if (r.breaches) card.append(el('div', 'breach', `🚨 Tried another hub ×${r.breaches}`));
+      card.addEventListener('click', () => open(r.ticket_id));
+      list.append(card);
+    }
+    renderStats(rows, now);
+  }
+
+  // ---- detail dialog
+  function clearPhotos() {
+    for (const u of photoUrls) URL.revokeObjectURL(u);
+    photoUrls = [];
+    $('dPhotos').replaceChildren();
+  }
+
+  async function open(id) {
+    try {
+      const { record } = await json('/' + encodeURIComponent(id));
+      current = record;
+      fill(record);
+      if (!$('dlg').open) $('dlg').showModal();
+      clearPhotos();
+      for (const p of record.photos) {
+        const res = await api(`/${encodeURIComponent(id)}/photos/${p.id}`);
+        if (!res.ok || current?.ticket_id !== id) continue;
+        const url = URL.createObjectURL(await res.blob());
+        photoUrls.push(url);
+        const img = el('img');
+        img.alt = 'Photo sent by the steward';
+        img.src = url;
+        $('dPhotos').append(img);
+      }
+    } catch (err) { flash('error', err.message); }
+  }
+
+  function fill(r) {
+    const st = statusOf(r, new Date());
+    $('dSeat').textContent = seatOf(r);
+    $('dStatus').textContent = st.text;
+    for (const b of $('dSeg').children) b.classList.toggle('on', b.dataset.s === r.current_status);
+    $('dReason').value = notGiven(r.reasoning) ? '' : r.reasoning;
+    $('dDesc').value = notGiven(r.description) ? '' : r.description;
+    const ev = $('dEvents');
+    ev.replaceChildren();
+    for (const e of r.events) {
+      const li = el('li', e.is_breach_event ? 'breach-ev' : '', `${time(e.timestamp)} · ${ACTIONS[e.action_logged] || e.action_logged} · ${e.hub_location} · ${e.steward_name}`);
+      ev.append(li);
+    }
+    if (!r.events.length) ev.append(el('li', null, 'No history.'));
+    $('dTicket').textContent = r.section ? `Ticket ${r.ticket_id}` : '';
+  }
+
+  async function save(patch, okText) {
+    if (!current) return;
+    try {
+      const { record } = await json('/' + encodeURIComponent(current.ticket_id), { method: 'PATCH', body: JSON.stringify(patch) });
+      current = { ...record };
+      fill(record);
+      flash('notice', okText);
+      lastJson = '';
+      load();
+    } catch (err) { flash('error', err.message); }
+  }
+
+  $('dSeg').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (b && current && b.dataset.s !== current.current_status) save({ status: b.dataset.s }, 'Status changed.');
+  });
+  $('dSave').addEventListener('click', () => save({ reasoning: $('dReason').value, description: $('dDesc').value }, 'Saved.'));
+  $('dDelete').addEventListener('click', async () => {
+    if (!current || !confirm(`Delete ${seatOf(current)} and its photos? This can’t be undone.`)) return;
+    try {
+      await json('/' + encodeURIComponent(current.ticket_id), { method: 'DELETE' });
+      $('dlg').close();
+      flash('notice', 'Record deleted.');
+      lastJson = '';
+      load();
+    } catch (err) { flash('error', err.message); }
+  });
+  $('dClose').addEventListener('click', () => $('dlg').close());
+  $('dlg').addEventListener('close', () => { current = null; clearPhotos(); });
+
+  // ---- toolbar
+  let debounce;
+  $('q').addEventListener('input', () => { clearTimeout(debounce); debounce = setTimeout(() => { lastJson = ''; load(); }, 250); });
+  for (const id of ['hub', 'status', 'breaches']) $(id).addEventListener('change', () => { lastJson = ''; load(); });
+  $('export').addEventListener('click', async () => {
+    try {
+      const res = await api('/export.csv' + query());
+      if (!res.ok) throw new Error(`Export failed (HTTP ${res.status})`);
+      const name = (res.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'gatekeeper-records.csv';
+      const a = el('a');
+      a.href = URL.createObjectURL(await res.blob());
+      a.download = name;
+      document.body.append(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    } catch (err) { flash('error', err.message); }
+  });
+
+  // ---- unlock
+  async function unlock() {
+    adminKey = $('key').value.trim() || adminKey;
+    if (!adminKey) return;
+    try {
+      await json('/?status=admitted&q=' + encodeURIComponent('-key check-')); // small query, just to test the key
+      try { sessionStorage.setItem(KEY, adminKey); } catch {}
+      $('key').value = '';
+      $('keyBox').hidden = true;
+      $('app').hidden = false;
+      flash('error', '');
+      lastJson = '';
+      await load();
+      clearInterval(timer);
+      timer = setInterval(load, 5000);
+    } catch (err) { flash('error', err.message); }
+  }
+  $('unlock').addEventListener('click', unlock);
+  $('key').addEventListener('keydown', (e) => { if (e.key === 'Enter') unlock(); });
+  if (adminKey) unlock();
+})();
+</script>
+</body>
+</html>
