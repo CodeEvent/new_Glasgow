@@ -13,6 +13,8 @@ Stewards log and check refused patrons entirely inside your **work WhatsApp grou
 | `313 L` or `234 O` (section and row), `313` or `SECTION 313` (whole section) | 🔎 everyone on record there, in seat order. A bare number only gets a reply if something is on record, so normal chat like "10" is ignored. |
 | `FIND green hat` | searches tonight's descriptions, reasons and notes; for when you see someone but don't know their seat |
 | `NOTE 52 YY 14 came back calm` | 🗒️ adds a note to a saved record; checks show the latest notes |
+| `REFUSED 300 L 205 206 207 West` (also `205,206,207`, `205, 206 and 207`, `205-207`) | 👥 logs a **group**: one record per seat, the questions asked once for everyone, marked "group of 3". Up to 20 seats. `UNDO` removes the whole group; `EDIT 300 L 206` changes one person. Write the hub after the seats: in `300 L 205 1 2`, the 1 and 2 are read as reasons. |
+| `300 L 205 206 207` | 🔎 checks every seat in one reply |
 | `PARTY 52 YY 14 3` | 👥 sets the group size. Or add `x3` / `party of 3` to the log line: `REFUSED 52 YY 14 West x3` |
 | `EJECTED 52 YY 14 West` | ⛔ logs someone removed from **inside** the venue (or answer *3* to the first question). Treated as refused at every gate. |
 | `EDIT 52 YY 14` | ✏️ re-asks the reasons and description of a saved record. Your own last log, or any record for group admins. `CANCEL` keeps it as it was. |
