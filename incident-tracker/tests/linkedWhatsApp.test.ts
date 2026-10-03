@@ -40,6 +40,10 @@ function waMsg(jid: string, message: Record<string, unknown>, opts: { participan
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 900));
+/** For slow paths (QR decoding): wait until a reply has been sent, up to 5 s. */
+const replied = async (sent: unknown[]) => {
+  for (let i = 0; i < 50 && sent.length === 0; i++) await new Promise((r) => setTimeout(r, 100));
+};
 
 describe('message unwrapping', () => {
   it('finds text and images inside WhatsApp wrappers', () => {
@@ -84,7 +88,7 @@ describe.skipIf(!HAS_DB)('linked WhatsApp bot routing (fake socket)', () => {
   it('reads a ticket QR from a photo', async () => {
     media.buffer = await QRCode.toBuffer('TM-847294-X', { width: 300 });
     deliver(waMsg(GROUP, { imageMessage: { mimetype: 'image/png', caption: '30 BB 212 100 South 1 F 1 1 adult swaying' } }, { participant: '111@lid' }));
-    await settle();
+    await replied(sent);
     expect(sent[0].content.text).toContain('✅ Logged 🟠 *SENT AWAY 30 MIN* · BB 212 100');
   });
 

@@ -255,6 +255,7 @@ type Field = 'decision' | 'seat' | 'hub' | 'reasons' | 'other' | 'gender' | 'hei
 interface Pending extends ParsedLog {
   editTicketId?: string; // EDIT: re-asking the details of a saved record
   editLabel?: string;
+  seatLookedUp?: string; // seat already checked against existing records (warned once)
   otherReason?: string; // what happened, when "Other" is one of the reasons ('' = skipped)
   ticketCode?: string;
   photo?: { data: Buffer; mime: string };
@@ -433,6 +434,18 @@ export class StewardBot {
 
     // ---- an answer to the bot's last question
     if (p) {
+      // A bare seat while the log already has its seat: they want to check it, not answer.
+      // Only for a seat that is on record (or this log's own): "3 4 5" or "1 M 3" are answers.
+      const seat = p.asked !== 'seat' && p.asked !== 'other' && p.seat ? parseSeatAnswer(text) : null;
+      if (seat) {
+        const own = `${seat.section} ${seat.row} ${seat.seat}` === `${p.section} ${p.row} ${p.seat}`;
+        const known = own || (await getTicketProfileBySeat(seat.section!, seat.row!, seat.seat!).catch(() => null));
+        if (known) {
+          const check = await this.check({ kind: 'check_seat', section: seat.section!, row: seat.row!, seat: seat.seat! });
+          const still = `_You’re still logging ${p.section} ${p.row} ${p.seat}. Answer the question below, or send CANCEL._\n${this.prompt(p.asked ?? this.nextMissing(p) ?? 'reasons', p, m.senderId)}`;
+          return [check, { text: still }];
+        }
+      }
       const answered = this.applyAnswer(p, text);
       if (answered) return this.advance(m, p);
       return [{ text: this.prompt(p.asked ?? this.nextMissing(p) ?? 'reasons', p, m.senderId) }];
@@ -506,10 +519,28 @@ export class StewardBot {
       p.history ??= [];
       if (p.history[p.history.length - 1]?.field !== missing) p.history.push({ field: missing, before: snapshot(p) });
       const q = this.prompt(missing, p, m.senderId);
-      return [{ text: intro ? `${intro} ${q}` : q }];
+      const warning = await this.alreadyOnRecord(p);
+      const ask = intro ? `${intro} ${q}` : q;
+      return [{ text: warning ? `${warning}\n${ask}` : ask }];
     }
     this.pending.delete(this.key(m));
     return [{ text: p.editTicketId ? await this.commitEdit(p) : await this.commit(m, p) }];
+  }
+
+  /** Once per log, as soon as the seat is known: warn if that seat is already refused or sent away. */
+  private async alreadyOnRecord(p: Pending): Promise<string | null> {
+    if (p.editTicketId || !p.seat) return null;
+    const label = `${p.section} ${p.row} ${p.seat}`;
+    if (p.seatLookedUp === label) return null;
+    p.seatLookedUp = label;
+    try {
+      const prof = await getTicketProfileBySeat(p.section!, p.row!, p.seat);
+      if (!prof || prof.current_status === 'admitted') return null;
+      const status = formatQuickCheck(prof, { section: p.section, row: p.row, seat: p.seat }).split('\n').slice(0, 2).join('\n');
+      return `⚠️ *Already on record:*\n${status}\n_Only wanted to check? Send *CANCEL*. Carrying on logs a new attempt._\n`;
+    } catch {
+      return null;
+    }
   }
 
   // ---------------------------------------------------------------- saving

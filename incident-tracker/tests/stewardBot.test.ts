@@ -379,6 +379,28 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
     expect((await bot.handle(msg('priya', '313 YY 56')))[0].text).toContain('Abusive, Found in possession');
   });
 
+  it('warns when logging a seat already on record, and checks a seat sent mid-log', async () => {
+    await bot.handle(msg('dave', 'REFUSED 313 YY 56 West 1 -'));
+    // Sarah starts a log by mistake (LOG), then sends the seat she wanted to check.
+    await bot.handle(msg('sarah', 'LOG'));
+    await bot.handle(msg('sarah', '1'));
+    const [w] = await bot.handle(msg('sarah', '313 yy 56'));
+    expect(w.text).toContain('⚠️ *Already on record:*');
+    expect(w.text).toContain('🔴 *REFUSED*');
+    expect(w.text).toContain('Send *CANCEL*');
+    expect(w.text).toContain('Which hub');
+    // Now a bare seat is a check, with a reminder of the open question.
+    const [check, still] = await bot.handle(msg('sarah', '313 YY 56'));
+    expect(check.text).toContain('🔴 *REFUSED*');
+    expect(still.text).toContain('still logging 313 YY 56');
+    expect(still.text).toContain('Which hub');
+    expect((await bot.handle(msg('sarah', 'cancel')))[0].text).toContain('Cancelled');
+    // A new seat isn't warned about.
+    await bot.handle(msg('sarah', 'LOG'));
+    await bot.handle(msg('sarah', '1'));
+    expect((await bot.handle(msg('sarah', '1 A 1')))[0].text).not.toContain('Already on record');
+  });
+
   it('starts a log with LOG or a photo captioned with the seat, asking every question', async () => {
     const [a] = await bot.handle(msg('dave', 'log'));
     expect(a.text).toContain('Refused entry, sent away');
