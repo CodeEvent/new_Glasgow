@@ -1,10 +1,22 @@
 import path from 'path';
-import { Router, type Request, type Response } from 'express';
+import express, { Router, type NextFunction, type Request, type Response } from 'express';
 import QRCode from 'qrcode';
 import { getConfig } from '../config/env';
 import { linkedWhatsApp } from '../channels/linkedWhatsApp';
 import { adminAuth } from '../middleware/adminAuth';
 import { deleteRecord, getPhoto, getRecord, listRecords, parseFilter, recordsToCsv, updateRecord } from '../services/adminRecords';
+import {
+  MAP_IMAGE_TYPES,
+  MAX_MAP_BYTES,
+  deleteBlock,
+  getBlocks,
+  getMapImage,
+  hasMapImage,
+  sectionCounts,
+  setBlock,
+  setMapImage,
+  validBlock,
+} from '../services/venueMap';
 
 export const adminRouter = Router();
 
@@ -142,3 +154,67 @@ records.delete(
 );
 
 adminRouter.use('/api/records', records);
+
+// ---- seating map: an uploaded plan image + where each block is on it
+const map = Router();
+map.use(adminAuth);
+
+map.get(
+  '/',
+  wrap(async (_req, res) => {
+    const [hasImage, blocks, sections] = await Promise.all([hasMapImage(), getBlocks(), sectionCounts()]);
+    res.json({ ok: true, hasImage, blocks, sections });
+  }),
+);
+map.get(
+  '/image',
+  wrap(async (_req, res) => {
+    const img = await getMapImage();
+    if (!img) return void res.status(404).json({ ok: false, error: 'No plan uploaded yet' });
+    res.setHeader('Content-Type', img.mime);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.send(img.data);
+  }),
+);
+map.put(
+  '/image',
+  (req: Request, res: Response, next: NextFunction) => {
+    // Only raster images: SVG and HTML can carry scripts.
+    if (!(MAP_IMAGE_TYPES as readonly string[]).includes(String(req.headers['content-type'] ?? '').split(';')[0].trim())) {
+      return void res.status(415).json({ ok: false, error: 'Upload a PNG, JPEG, WebP or GIF image' });
+    }
+    next();
+  },
+  express.raw({ type: () => true, limit: MAX_MAP_BYTES }),
+  wrap(async (req, res) => {
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return void res.status(400).json({ ok: false, error: 'Empty upload' });
+    await setMapImage(req.body, String(req.headers['content-type']).split(';')[0].trim());
+    res.json({ ok: true });
+  }),
+);
+map.put(
+  '/blocks',
+  wrap(async (req, res) => {
+    const { block, x, y } = req.body ?? {};
+    const inRange = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
+    if (!validBlock(block) || !inRange(x) || !inRange(y)) {
+      return void res.status(400).json({ ok: false, error: 'Send a block name (letters/digits) and x, y between 0 and 1' });
+    }
+    res.json({ ok: true, blocks: await setBlock(block, x, y) });
+  }),
+);
+map.delete(
+  '/blocks/:block',
+  wrap(async (req, res) => {
+    const block = String(req.params.block);
+    if (!validBlock(block)) return void res.status(400).json({ ok: false, error: 'Bad block name' });
+    res.json({ ok: true, blocks: await deleteBlock(block) });
+  }),
+);
+// Upload too big -> 413 with a clear message.
+map.use((err: Error & { type?: string }, _req: Request, res: Response, next: NextFunction) => {
+  if (err.type === 'entity.too.large') return void res.status(413).json({ ok: false, error: 'Image too large (max 10 MB)' });
+  next(err);
+});
+
+adminRouter.use('/api/map', map);

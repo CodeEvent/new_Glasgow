@@ -42,6 +42,8 @@ export function parseFilter(query: Record<string, unknown>): RecordFilter {
   const status = str(query.status);
   return {
     q: str(query.q)?.replace(/\s+/g, ' ').slice(0, 100),
+    section: str(query.section)?.slice(0, 16),
+    row: str(query.row)?.slice(0, 8),
     hub: HUBS.includes(hub as Hub) ? (hub as Hub) : undefined,
     status: STATUSES.includes(status as IncidentStatus) ? (status as IncidentStatus) : undefined,
     breaches: query.breaches === '1' || query.breaches === 'true',

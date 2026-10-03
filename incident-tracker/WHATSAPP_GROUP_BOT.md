@@ -53,6 +53,17 @@ Reply `-` to skip a description question (4 to 8). Quick stewards can put it all
 
 ---
 
+## Seating map (records page)
+
+On the records page (`http://localhost:3000/admin/records`), tap **Map**:
+1. **Upload plan image**: a seating plan you're allowed to use (e.g. from the venue). PNG, JPEG, WebP or GIF, up to 10 MB. It's stored only in the phone's database, never online or in the code.
+2. **Place blocks**: type a block number (e.g. `313`), tap where it is on the plan. Numbers count up after each tap (313 → 314), so you can go along a row quickly. Tap a marker to remove it. **Done** when finished.
+3. Each placed block shows a live marker: 🔴 refused, ⛔ ejected, 🟠 sent away, ⚫ cool-off ended, with counts. Tap a block to see its records. Blocks with records but no position are listed under the plan.
+
+Markers are per **block** (section), not per seat: seat-by-seat positions aren't published for the arena.
+
+---
+
 ## Optional: AI helper (plain English)
 
 Off until you add an API key. Then stewards can:

@@ -59,6 +59,24 @@
   .breach { color: #fca5a5; font-weight: 700; font-size: 13px; }
   .empty { text-align: center; padding: 40px 16px; color: var(--muted); }
 
+  .tabs { display: inline-flex; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 3px; gap: 3px; }
+  .tabs button { background: transparent; color: var(--muted); padding: 8px 18px; }
+  .tabs button.on { background: #2c333d; color: var(--text); }
+  .chip { display: inline-flex; gap: 6px; align-items: center; background: #2c333d; border-radius: 999px; padding: 4px 6px 4px 12px; font-size: 14px; }
+  .chip button { padding: 2px 8px; background: transparent; color: var(--muted); }
+  .plan { position: relative; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #fff; touch-action: manipulation; }
+  .plan img { display: block; width: 100%; height: auto; user-select: none; -webkit-user-drag: none; }
+  .plan.editing { outline: 3px solid var(--accent); cursor: crosshair; }
+  .marker { position: absolute; transform: translate(-50%, -50%); min-width: 34px; min-height: 34px; padding: 4px 8px; border-radius: 999px;
+    font: 700 13px/1.1 system-ui, sans-serif; color: #fff; background: rgba(30, 36, 44, .78); border: 2px solid #fff; box-shadow: 0 1px 6px rgba(0,0,0,.45);
+    display: grid; place-items: center; white-space: nowrap; }
+  .marker small { font-weight: 600; font-size: 11px; display: block; }
+  .marker.refused { background: var(--red); } .marker.cooling { background: #b45309; } .marker.ended { background: #6b7280; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+  .placebar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
+  .placebar input { width: 110px; }
+  .filelabel { display: inline-flex; align-items: center; font-weight: 600; border-radius: 10px; padding: 10px 14px; background: #2c333d; cursor: pointer; }
+  .filelabel input { display: none; }
   dialog { width: min(640px, calc(100vw - 24px)); max-height: calc(100vh - 24px); padding: 0; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--text); }
   dialog::backdrop { background: rgba(0, 0, 0, .6); }
   .dlg { padding: 16px; display: grid; gap: 14px; }
@@ -97,6 +115,37 @@
 
   <div id="app" hidden>
     <div style="display:grid;gap:14px">
+      <div class="row" style="justify-content:space-between">
+        <div class="tabs" role="tablist">
+          <button class="on" data-view="list" role="tab">List</button>
+          <button data-view="map" role="tab">Map</button>
+        </div>
+        <span class="chip" id="blockChip" hidden><span id="blockChipText"></span><button id="clearBlock" aria-label="Show all blocks">✕</button></span>
+      </div>
+
+      <div id="mapView" hidden style="display:grid;gap:12px">
+        <section class="box" id="mapEmpty" hidden>
+          <h2>Seating plan</h2>
+          <p class="muted">Upload a seating plan you’re allowed to use (for example one from the venue). It’s kept only on this phone, not online. Then tap <strong>Place blocks</strong> to mark where each block is.</p>
+          <label class="filelabel">Upload plan image<input type="file" id="planFile" accept="image/png,image/jpeg,image/webp,image/gif"></label>
+        </section>
+        <div id="mapReady" hidden style="display:grid;gap:12px">
+          <div class="row">
+            <button class="secondary" id="placeBtn">Place blocks</button>
+            <label class="filelabel">Change plan<input type="file" id="planFile2" accept="image/png,image/jpeg,image/webp,image/gif"></label>
+            <span class="legend"><span>🔴 refused / ejected</span><span>🟠 sent away</span><span>⚫ cool-off ended</span></span>
+          </div>
+          <div class="placebar" id="placeBar" hidden>
+            <label style="display:flex;gap:8px;align-items:center;color:var(--text)">Block <input id="blockName" maxlength="6" placeholder="313" autocomplete="off"></label>
+            <span class="muted">then tap where it is on the plan. Tap a marker to remove it.</span>
+            <button id="placeDone">Done</button>
+          </div>
+          <div class="plan" id="plan"><img id="planImg" alt="Seating plan"><div id="markers"></div></div>
+          <p class="muted" id="unplaced"></p>
+        </div>
+      </div>
+
+      <div id="listView" style="display:grid;gap:14px">
       <div class="toolbar">
         <label class="search">Search
           <input id="q" type="search" placeholder="Seat (52 YY 14), reason, clothing…" autocomplete="off">
@@ -122,6 +171,7 @@
       <div class="stats" id="stats"></div>
       <div class="list" id="list"></div>
       <p class="muted" id="footnote">Updates every 5 seconds. Records are deleted automatically 24 hours after their last change.</p>
+      </div>
     </div>
   </div>
 </main>
@@ -182,6 +232,11 @@
   let current = null; // record open in the dialog
   let photoUrls = [];
   let lastJson = '';
+  let view = 'list';
+  let blockFilter = '';
+  let placing = false;
+  let planUrl = null;
+  let mapData = null;
 
   const ACTIONS = {
     initial_refusal: 'Refused', initial_cool_off: 'Sent away 30 min', bypass_attempt: '🚨 Tried again',
@@ -246,11 +301,13 @@
     if ($('hub').value) p.set('hub', $('hub').value);
     if ($('status').value) p.set('status', $('status').value);
     if ($('breaches').checked) p.set('breaches', '1');
+    if (blockFilter) p.set('section', blockFilter);
     const s = p.toString();
     return s ? '?' + s : '';
   }
 
   async function load() {
+    if (view === 'map') return loadMap();
     try {
       const body = await json('/' + query());
       setPill('live', 'Live');
@@ -406,6 +463,151 @@
       document.body.append(a);
       a.click();
       setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    } catch (err) { flash('error', err.message); }
+  });
+
+  // ---- map
+  async function mapApi(path, opts = {}) {
+    const res = await fetch('/admin/api/map' + path, { ...opts, headers: { 'x-admin-key': adminKey, ...(opts.headers || {}) } });
+    if (res.status === 401) { lock(); throw new Error('Wrong admin key.'); }
+    return res;
+  }
+  async function mapJson(path, opts) {
+    const res = await mapApi(path, opts);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || body.ok === false) throw new Error(body.error || `Request failed (HTTP ${res.status})`);
+    return body;
+  }
+
+  async function loadPlanImage(force) {
+    if (planUrl && !force) return;
+    const res = await mapApi('/image');
+    if (!res.ok) return;
+    if (planUrl) URL.revokeObjectURL(planUrl);
+    planUrl = URL.createObjectURL(await res.blob());
+    $('planImg').src = planUrl;
+  }
+
+  async function loadMap() {
+    try {
+      mapData = await mapJson('/');
+      setPill('live', 'Live');
+      flash('error', '');
+      $('mapEmpty').hidden = mapData.hasImage;
+      $('mapReady').hidden = !mapData.hasImage;
+      if (mapData.hasImage) await loadPlanImage(false);
+      renderMarkers();
+    } catch (err) {
+      if (adminKey) { setPill('bad', 'Offline'); flash('error', err.message); }
+    }
+  }
+
+  function markerClass(c) {
+    if (!c) return '';
+    if (c.refused || c.ejected) return 'refused';
+    if (c.away) return 'cooling';
+    if (c.ended) return 'ended';
+    return '';
+  }
+
+  function renderMarkers() {
+    const box = $('markers');
+    box.replaceChildren();
+    if (!mapData) return;
+    const { blocks, sections } = mapData;
+    for (const [name, pos] of Object.entries(blocks)) {
+      const c = sections[name];
+      const m = el('button', 'marker ' + markerClass(c));
+      m.type = 'button';
+      m.style.left = pos.x * 100 + '%';
+      m.style.top = pos.y * 100 + '%';
+      m.append(document.createTextNode(name));
+      if (c) {
+        const bits = [c.refused && `🔴${c.refused}`, c.ejected && `⛔${c.ejected}`, c.away && `🟠${c.away}`, c.ended && `⚫${c.ended}`].filter(Boolean);
+        if (bits.length) m.append(el('small', null, bits.join(' ')));
+      }
+      m.title = c ? `Block ${name}: ${c.total} on record (${c.seats.join(', ')})` : `Block ${name}: nothing on record`;
+      m.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (placing) {
+          if (!confirm(`Remove block ${name} from the plan?`)) return;
+          try { mapData.blocks = (await mapJson('/blocks/' + encodeURIComponent(name), { method: 'DELETE' })).blocks; renderMarkers(); }
+          catch (err) { flash('error', err.message); }
+          return;
+        }
+        showBlock(name);
+      });
+      box.append(m);
+    }
+    const missing = Object.entries(sections)
+      .filter(([name]) => !blocks[name])
+      .map(([name, c]) => `${name} (${c.total})`);
+    $('unplaced').textContent = missing.length
+      ? `Not on the plan yet: ${missing.join(', ')}. Tap “Place blocks” to add them.`
+      : Object.keys(blocks).length ? 'Tap a block to see its records.' : 'Tap “Place blocks”, type a block number, then tap where it is on the plan.';
+  }
+
+  function showBlock(name) {
+    blockFilter = name;
+    $('blockChipText').textContent = `Block ${name}`;
+    $('blockChip').hidden = false;
+    setView('list');
+  }
+  $('clearBlock').addEventListener('click', () => {
+    blockFilter = '';
+    $('blockChip').hidden = true;
+    lastJson = '';
+    load();
+  });
+
+  function setView(v) {
+    view = v;
+    for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('on', b.dataset.view === v);
+    $('mapView').hidden = v !== 'map';
+    $('listView').hidden = v !== 'list';
+    lastJson = '';
+    load();
+  }
+  for (const b of document.querySelectorAll('.tabs button')) b.addEventListener('click', () => setView(b.dataset.view));
+
+  async function uploadPlan(input) {
+    const file = input.files && input.files[0];
+    input.value = '';
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) return flash('error', 'That image is over 10 MB. Use a smaller one.');
+    try {
+      await mapJson('/image', { method: 'PUT', headers: { 'Content-Type': file.type }, body: file });
+      flash('notice', 'Plan saved on this phone.');
+      await loadPlanImage(true);
+      await loadMap();
+    } catch (err) { flash('error', err.message); }
+  }
+  $('planFile').addEventListener('change', (e) => uploadPlan(e.target));
+  $('planFile2').addEventListener('change', (e) => uploadPlan(e.target));
+
+  function setPlacing(on) {
+    placing = on;
+    $('placeBar').hidden = !on;
+    $('plan').classList.toggle('editing', on);
+    $('placeBtn').hidden = on;
+    if (on) $('blockName').focus();
+  }
+  $('placeBtn').addEventListener('click', () => setPlacing(true));
+  $('placeDone').addEventListener('click', () => setPlacing(false));
+  $('plan').addEventListener('click', async (e) => {
+    if (!placing) return;
+    const block = $('blockName').value.trim().toUpperCase();
+    if (!/^[A-Z0-9]{1,6}$/.test(block)) return flash('error', 'Type the block number first (letters and digits), then tap the plan.');
+    const r = $('planImg').getBoundingClientRect();
+    const x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+    const y = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+    try {
+      mapData.blocks = (await mapJson('/blocks', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ block, x, y }) })).blocks;
+      renderMarkers();
+      flash('notice', `Block ${block} placed.`);
+      // Next block: numbers count up, so 101 -> 102 saves typing.
+      $('blockName').value = /^\d+$/.test(block) ? String(Number(block) + 1) : '';
+      $('blockName').select();
     } catch (err) { flash('error', err.message); }
   });
 
