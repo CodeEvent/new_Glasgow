@@ -907,7 +907,10 @@ export class StewardBot {
    * used for a policy suggestion when they didn't say refused or sent away.
    */
   private async fromAi(m: InboundMessage, k: string, res: AiResult, seats?: AiContext['seats'], said?: string): Promise<OutboundReply[]> {
-    if (res.kind !== 'draft') return [{ text: res.kind === 'answer' ? `🤖 ${res.text}` : res.text }];
+    // Voice notes: show what was heard, so the steward can spot a mishearing.
+    const heardLine = res.kind !== 'error' && res.heard ? `🎙️ I heard: “${sanitize(res.heard, 400)}”\n` : '';
+    if (res.kind !== 'draft') return [{ text: res.kind === 'answer' ? `${heardLine}🤖 ${res.text}` : res.text }];
+    if (res.heard && said === undefined) said = res.heard; // the decision rule applies to what they said
     const d = res.draft;
     const p: Pending = {
       startedAt: this.now(),
@@ -938,6 +941,7 @@ export class StewardBot {
       setSeats(p, seats);
       intro.push(seats.length === 1 ? `🎫 Seat from the ticket: *${seats[0].section} ${seats[0].row} ${seats[0].seat}*.` : '🎫 The ticket shows several seats.');
     }
+    if (heardLine) intro.push(heardLine.trim());
     intro.push('🤖 Got it.');
     if (!p.decision && said && this.ai?.advise) {
       const policy = await this.policy();

@@ -67,8 +67,11 @@ const envObject = z.object({
   ANTHROPIC_API_KEY: optionalText,
   // Free alternative: Google Gemini (free tier). Used first when its key is set.
   GEMINI_API_KEY: optionalText,
-  // auto = Gemini if GEMINI_API_KEY is set, else Claude if ANTHROPIC_API_KEY is set.
-  AI_PROVIDER: z.enum(['auto', 'gemini', 'claude']).default('auto'),
+  // Free alternative: Groq (or any OpenAI-compatible API via AI_BASE_URL). Used first when set.
+  GROQ_API_KEY: optionalText,
+  AI_BASE_URL: optionalText,
+  // auto = Groq if GROQ_API_KEY is set, else Gemini, else Claude.
+  AI_PROVIDER: z.enum(['auto', 'groq', 'gemini', 'claude']).default('auto'),
   // Model for the chosen provider (default: gemini-flash-latest / claude-opus-5-5).
   AI_MODEL: optionalText,
   // Most AI messages per day for everyone together (keeps the bill predictable).

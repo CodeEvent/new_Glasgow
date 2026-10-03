@@ -36,7 +36,11 @@ export interface AiDraft {
   party?: number;
 }
 
-export type AiResult = { kind: 'answer'; text: string } | { kind: 'draft'; draft: AiDraft } | { kind: 'error'; text: string };
+/** `heard`: what a voice note was transcribed as, shown to the steward so they can check it. */
+export type AiResult =
+  | { kind: 'answer'; text: string; heard?: string }
+  | { kind: 'draft'; draft: AiDraft; heard?: string }
+  | { kind: 'error'; text: string };
 
 export interface DescriptionFields {
   gender?: string;

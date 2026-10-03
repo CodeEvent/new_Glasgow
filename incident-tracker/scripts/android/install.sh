@@ -123,20 +123,34 @@ cat > "$BIN/gk-set" <<EOF
 F="$DATA/settings.env"
 touch "\$F"; chmod 600 "\$F"
 # Show settings with the API key hidden.
-if [ \$# -lt 2 ]; then echo "Settings (\$F):"; sed -E "s/^((ANTHROPIC|GEMINI)_API_KEY=).*/\\1'(set, hidden)'/" "\$F"; echo "(empty = defaults)"; exit 0; fi
+if [ \$# -lt 2 ]; then echo "Settings (\$F):"; sed -E "s/^((ANTHROPIC|GEMINI|GROQ)_API_KEY=).*/\\1'(set, hidden)'/" "\$F"; echo "(empty = defaults)"; exit 0; fi
 case "\$1" in
-  SUMMARY_TIME|WA_HUBHOP_ALERTS|WA_READMIT_REMINDERS|WA_SUPERVISOR_ONLY|WA_NIGHTLY_BACKUP|WA_HEALTH_ALERTS|ANTHROPIC_API_KEY|GEMINI_API_KEY|AI_PROVIDER|AI_MODEL|AI_DAILY_LIMIT|OCR_ENABLED|COOL_OFF_MINUTES|RETENTION_HOURS|TZ_DISPLAY) ;;
-  *) echo "Unknown setting: \$1"; echo "Use one of: SUMMARY_TIME WA_HUBHOP_ALERTS WA_READMIT_REMINDERS WA_SUPERVISOR_ONLY WA_NIGHTLY_BACKUP WA_HEALTH_ALERTS ANTHROPIC_API_KEY GEMINI_API_KEY AI_PROVIDER AI_MODEL AI_DAILY_LIMIT OCR_ENABLED COOL_OFF_MINUTES RETENTION_HOURS TZ_DISPLAY"; exit 1 ;;
+  SUMMARY_TIME|WA_HUBHOP_ALERTS|WA_READMIT_REMINDERS|WA_SUPERVISOR_ONLY|WA_NIGHTLY_BACKUP|WA_HEALTH_ALERTS|ANTHROPIC_API_KEY|GEMINI_API_KEY|GROQ_API_KEY|AI_BASE_URL|AI_PROVIDER|AI_MODEL|AI_DAILY_LIMIT|OCR_ENABLED|COOL_OFF_MINUTES|RETENTION_HOURS|TZ_DISPLAY) ;;
+  *) echo "Unknown setting: \$1"; echo "Use one of: SUMMARY_TIME WA_HUBHOP_ALERTS WA_READMIT_REMINDERS WA_SUPERVISOR_ONLY WA_NIGHTLY_BACKUP WA_HEALTH_ALERTS ANTHROPIC_API_KEY GEMINI_API_KEY GROQ_API_KEY AI_BASE_URL AI_PROVIDER AI_MODEL AI_DAILY_LIMIT OCR_ENABLED COOL_OFF_MINUTES RETENTION_HOURS TZ_DISPLAY"; exit 1 ;;
 esac
 case "\$2" in *\'*) echo "Values can't contain quotes."; exit 1 ;; esac
 grep -v "^\$1=" "\$F" > "\$F.tmp" || true
 echo "\$1='\$2'" >> "\$F.tmp"
 mv "\$F.tmp" "\$F"; chmod 600 "\$F"
-if [ "\$1" = ANTHROPIC_API_KEY ] || [ "\$1" = GEMINI_API_KEY ]; then echo "Saved the AI key (hidden). Restarting…"; else echo "Saved \$1=\$2. Restarting…"; fi
+if [ "\$1" = ANTHROPIC_API_KEY ] || [ "\$1" = GEMINI_API_KEY ] || [ "\$1" = GROQ_API_KEY ]; then echo "Saved the AI key (hidden). Restarting…"; else echo "Saved \$1=\$2. Restarting…"; fi
 gk-stop >/dev/null
 gk-start
 EOF
-chmod +x "$BIN"/gk-start "$BIN"/gk-stop "$BIN"/gk-status "$BIN"/gk-key "$BIN"/gk-log "$BIN"/gk-update "$BIN"/gk-set
+cat > "$BIN/gk-demo" <<EOF
+#!/data/data/com.termux/files/usr/bin/bash
+# gk-demo         delete ALL records and load made-up demo records (for practice)
+# gk-demo clear   delete ALL records, no demo records
+DEMO=true
+[ "\${1:-}" = clear ] && DEMO=false
+if [ "\$DEMO" = true ]; then echo "This deletes ALL records (with photos and notes) and loads demo records."; else echo "This deletes ALL records (with photos and notes)."; fi
+echo "Your WhatsApp link, groups, policy and map are kept."
+read -r -p "Type YES to continue: " ok
+[ "\$ok" = YES ] || { echo "Cancelled. Nothing changed."; exit 1; }
+curl -fsS -X POST "http://127.0.0.1:$PORT/admin/api/demo/reset" \\
+  -H "x-admin-key: \$(cat "$DATA/admin-key.txt")" -H 'Content-Type: application/json' \\
+  -d "{\"confirm\":\"DELETE ALL\",\"demo\":\$DEMO}" && echo || echo "Failed: is Gatekeeper running? (gk-status)"
+EOF
+chmod +x "$BIN"/gk-start "$BIN"/gk-stop "$BIN"/gk-status "$BIN"/gk-key "$BIN"/gk-log "$BIN"/gk-update "$BIN"/gk-set "$BIN"/gk-demo
 
 # ---- start again after the phone restarts (needs the Termux:Boot app, opened once)
 mkdir -p "$HOME/.termux/boot"
@@ -156,5 +170,5 @@ Next:
   2. Paste the admin key above, then link the WhatsApp phone (scan the QR, or use "Get code").
   3. Tick your work group, Save, Send test.
 
-Commands: gk-status · gk-key · gk-log · gk-stop · gk-start · gk-update · gk-set
+Commands: gk-status · gk-key · gk-log · gk-stop · gk-start · gk-update · gk-set · gk-demo
 EOF

@@ -4,6 +4,7 @@ import QRCode from 'qrcode';
 import { getConfig } from '../config/env';
 import { linkedWhatsApp } from '../channels/linkedWhatsApp';
 import { adminAuth } from '../middleware/adminAuth';
+import { resetRecords } from '../services/demoData';
 import { deleteRecord, getPhoto, getRecord, listRecords, parseFilter, recordsToCsv, updateRecord } from '../services/adminRecords';
 import {
   MAP_IMAGE_TYPES,
@@ -218,3 +219,19 @@ map.use((err: Error & { type?: string }, _req: Request, res: Response, next: Nex
 });
 
 adminRouter.use('/api/map', map);
+
+// ---- start over: delete every record, optionally load made-up demo records
+const demo = Router();
+demo.use(adminAuth);
+demo.post(
+  '/reset',
+  wrap(async (req, res) => {
+    if (req.body?.confirm !== 'DELETE ALL') {
+      return void res.status(400).json({ ok: false, error: 'Send {"confirm": "DELETE ALL"} to delete every record' });
+    }
+    const result = await resetRecords({ demo: req.body?.demo !== false });
+    console.log(`[admin] records reset: ${result.deleted} deleted, ${result.created} demo records loaded`);
+    res.json({ ok: true, ...result });
+  }),
+);
+adminRouter.use('/api/demo', demo);
