@@ -9,7 +9,8 @@
 set -euo pipefail
 
 # This script updates the folder it lives in, so run a copy of it, not the file git may replace.
-if [ -f "$0" ] && [ -z "${GK_COPY:-}" ]; then
+# ($0 is checked by name: under "curl | bash" Termux sets it to the bash binary itself.)
+if [ -z "${GK_COPY:-}" ] && [ -f "$0" ] && [ "$(basename "$0")" = "install.sh" ]; then
   tmp="$(mktemp "${TMPDIR:-/tmp}/gk-install.XXXXXX")"
   cp "$0" "$tmp"
   GK_COPY=1 exec bash "$tmp" "$@"
