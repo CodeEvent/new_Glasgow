@@ -69,6 +69,45 @@ Want it running even when your laptop is off? Use the cloud setup below.
 
 ---
 
+## Free option: run it on an Android phone (always on)
+
+Any Android phone that stays **plugged in and online** can run the bot all the time, for free. It doesn't have to be the phone with the bot's WhatsApp number: it links to that number the same way the laptop does. An iPhone can't do this (iOS doesn't allow it).
+
+**You need** two free apps from the **same place** (both from F-Droid, or both from GitHub; Android rejects a mix):
+- **Termux**: https://f-droid.org/packages/com.termux/
+- **Termux:Boot**, which restarts the bot after the phone reboots: https://f-droid.org/packages/com.termux.boot/ (open it once after installing)
+
+If Termux came from the Play Store and the install below fails at the first step, reinstall Termux from F-Droid.
+
+**1. Stop the laptop bot first**, or both will answer every message: on the laptop's setup page click **Unlink**, then `Ctrl+C` in its terminal.
+
+**2. Install**: open Termux on the Android phone and paste:
+```bash
+curl -fsSL https://raw.githubusercontent.com/CodeEvent/new_Glasgow/claude/inspiring-fermi-ujdf1c/incident-tracker/scripts/android/install.sh | bash
+```
+It takes about 5–10 minutes the first time. At the end it prints the **admin key**.
+
+**3. Link**: in Chrome on the Android phone, open `http://localhost:3000/admin/whatsapp`, paste the admin key, and scan the QR with the phone that has the bot's WhatsApp number (WhatsApp → Settings → Linked devices → Link a device). Tick the work group, **Save**, **Send test**. The records page is `http://localhost:3000/admin/records` on the same phone.
+
+**4. Keep it awake** (this matters; Android otherwise stops the bot after a while):
+- Settings → Apps → **Termux** → Battery → **Unrestricted** (on some phones: "Don't optimise" or "Allow background activity"). Do the same for **Termux:Boot**.
+- Samsung: also Settings → Battery → Background usage limits → add Termux to **Never sleeping apps**.
+- Keep the phone **charging** and on Wi-Fi or mobile data. Turn off any automatic restart schedule.
+
+**Everyday commands** (type them in Termux):
+
+| Command | What it does |
+|---|---|
+| `gk-status` | Is the bot running? |
+| `gk-key` | Show the admin key |
+| `gk-log` | The last lines of the bot's log (`[linked-wa]` lines show the WhatsApp connection) |
+| `gk-stop` / `gk-start` | Stop / start it |
+| `gk-update` | Get the latest version and restart; records and the WhatsApp link are kept |
+
+The bot restarts by itself if it crashes, and after the phone reboots (thanks to Termux:Boot). Records, photos and the link are kept in `~/gatekeeper-data` on the phone.
+
+---
+
 ## Cloud setup (always on)
 
 ## What you need
