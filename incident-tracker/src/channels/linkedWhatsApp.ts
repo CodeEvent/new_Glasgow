@@ -5,7 +5,7 @@ import { getTicketProfile, getTicketProfileBySeat } from '../services/ticketLook
 import { createAiAgent } from '../services/aiProvider';
 import { StewardBot } from '../services/stewardBot';
 import { registerAlertSink } from '../services/whatsapp';
-import { loadBaileys, type WAMessage, type WASocket } from './baileys';
+import { loadBaileys, type OutgoingContent, type WAMessage, type WASocket } from './baileys';
 import { clearPostgresAuthState, getSetting, setSetting, usePostgresAuthState } from './pgAuthState';
 
 /**
@@ -171,6 +171,19 @@ export class LinkedWhatsApp {
   private admins = new Set<string>(); // admins of the selected groups = supervisors (CLEAR, REPORT)
   private adminChats: string[] = []; // one private chat per admin (phone number if known), for backups and health alerts
   private saidOnline = false;
+  /** Ids of messages the bot sent itself, so they are never treated as commands (no loops). */
+  private sentIds: string[] = [];
+
+  /** Every message the bot sends goes through here. */
+  private async send(jid: string, content: OutgoingContent, options?: { quoted?: WAMessage }): Promise<void> {
+    if (!this.sock) return;
+    const res = (await this.sock.sendMessage(jid, content, options)) as { key?: { id?: string | null } } | undefined;
+    const id = res?.key?.id;
+    if (id) {
+      this.sentIds.push(id);
+      if (this.sentIds.length > 1000) this.sentIds.splice(0, this.sentIds.length - 1000);
+    }
+  }
   private membersRefreshedAt = 0;
   private stopped = false;
   private attempts = 0;
@@ -312,7 +325,13 @@ export class LinkedWhatsApp {
     // One line per message (never its text) so `gk-log` shows why the bot did or didn't answer.
     const note = (what: string) => console.log(`[linked-wa] message in ${where}: ${what}`);
 
-    if (msg.key.fromMe) return note('sent by the bot’s own number, ignored (send from another phone)');
+    // Typed on the phone that holds the bot's number: a command, unless it's one of the bot's own messages.
+    const fromBotPhone = Boolean(msg.key.fromMe);
+    if (fromBotPhone) {
+      if (msg.key.id && this.sentIds.includes(msg.key.id)) return; // the bot's own reply
+      if (!getConfig().WA_BOT_PHONE_COMMANDS) return note('sent by the bot’s own number, ignored (send from another phone)');
+      if (!jid.endsWith('@g.us')) return; // the bot's phone chatting to someone privately: not for the bot
+    }
     const age = Math.round(Date.now() / 1000 - timestampSeconds(msg.messageTimestamp));
     if (age > MAX_MESSAGE_AGE_S) {
       return note(`${age}s old, ignored as backlog${age > 600 ? ' (if you just sent it, this device’s clock is wrong: turn on automatic date & time)' : ''}`);
@@ -322,7 +341,9 @@ export class LinkedWhatsApp {
       this.seenGroups.set(jid, Date.now());
       return note('group not ticked on the setup page, ignored');
     }
-    const senderId = isGroup ? (msg.key.participant ?? '') : jid;
+    // The bot's own phone: its own number ("447…:12@s.whatsapp.net" -> "447…@s.whatsapp.net").
+    const ownId = (this.me?.id ?? 'bot-phone@s.whatsapp.net').replace(/:\d+@/, '@');
+    const senderId = fromBotPhone ? ownId : isGroup ? (msg.key.participant ?? '') : jid;
     if (!senderId) return note('no sender, ignored');
     if (!msg.message) {
       return note('could not be decrypted yet (normal for a few minutes after linking; send it again)');
@@ -339,12 +360,12 @@ export class LinkedWhatsApp {
           image = { data: await downloadCapped(msg, img.fileLength, MAX_PHOTO_BYTES), mime: img.mimetype ?? 'image/jpeg' };
         } catch (err) {
           if (err instanceof TooBigError) {
-            await this.sock?.sendMessage(jid, { text: '⚠️ That photo is too big (max 8 MB). Send a normal photo or a screenshot.' }, { quoted: msg });
+            await this.send(jid, { text: '⚠️ That photo is too big (max 8 MB). Send a normal photo or a screenshot.' }, { quoted: msg });
             return note('photo too big, not downloaded');
           }
           console.error('[linked-wa] could not download photo:', (err as Error).message);
           note('photo could not be downloaded');
-          await this.sock?.sendMessage(
+          await this.send(
             jid,
             { text: '⚠️ I couldn’t download that photo. Please send it again (as a normal photo, not “view once”).' },
             { quoted: msg },
@@ -358,7 +379,7 @@ export class LinkedWhatsApp {
       if (voice) {
         if (isGroup) return note('voice note in a group, ignored');
         const tooLong = async () => {
-          await this.sock?.sendMessage(jid, { text: '🎙️ That voice note is too long. Keep it under a minute, or type it.' }, { quoted: msg });
+          await this.send(jid, { text: '🎙️ That voice note is too long. Keep it under a minute, or type it.' }, { quoted: msg });
           return note('voice note too long');
         };
         if ((voice.seconds ?? 0) > 120) return tooLong();
@@ -381,7 +402,7 @@ export class LinkedWhatsApp {
       const replies = await this.bot.handle({
         chatId: jid,
         senderId,
-        senderName: msg.pushName ?? senderId.split('@')[0],
+        senderName: msg.pushName ?? (fromBotPhone ? 'Bot phone' : senderId.split('@')[0]),
         // "@447… how many refused?" -> "how many refused?"
         text: mentionsBot && text ? text.replace(/@\d{5,}\s*/g, '').trim() : text,
         mentionsBot,
@@ -392,11 +413,11 @@ export class LinkedWhatsApp {
       note(replies.length ? `answered (${replies.length} repl${replies.length === 1 ? 'y' : 'ies'})` : 'not a log or seat check, no reply');
       for (const r of replies) {
         if (!this.sock) return;
-        if (r.image) await this.sock.sendMessage(jid, { image: r.image.data, caption: r.text, mimetype: r.image.mime }, { quoted: msg });
+        if (r.image) await this.send(jid, { image: r.image.data, caption: r.text, mimetype: r.image.mime }, { quoted: msg });
         else if (r.document) {
-          await this.sock.sendMessage(jid, { text: r.text }, { quoted: msg });
-          await this.sock.sendMessage(jid, { document: r.document.data, mimetype: r.document.mime, fileName: r.document.fileName });
-        } else await this.sock.sendMessage(jid, { text: r.text }, { quoted: msg });
+          await this.send(jid, { text: r.text }, { quoted: msg });
+          await this.send(jid, { document: r.document.data, mimetype: r.document.mime, fileName: r.document.fileName });
+        } else await this.send(jid, { text: r.text }, { quoted: msg });
       }
     });
   }
@@ -445,8 +466,8 @@ export class LinkedWhatsApp {
     await this.refreshMembers('', this.admins);
     for (const jid of this.adminChats) {
       this.enqueue(jid, async () => {
-        await this.sock?.sendMessage(jid, { text });
-        if (document) await this.sock?.sendMessage(jid, { document: document.data, mimetype: document.mime, fileName: document.fileName });
+        await this.send(jid, { text });
+        if (document) await this.send(jid, { document: document.data, mimetype: document.mime, fileName: document.fileName });
       });
     }
     return this.adminChats.length;
@@ -487,7 +508,7 @@ export class LinkedWhatsApp {
     for (const g of this.groups) {
       if (g.jid === exceptJid) continue;
       this.enqueue(g.jid, async () => {
-        await this.sock?.sendMessage(g.jid, { text: body });
+        await this.send(g.jid, { text: body });
       });
     }
   }
@@ -516,7 +537,7 @@ export class LinkedWhatsApp {
 
   async sendTest(jid: string): Promise<void> {
     if (!this.sock || this.status !== 'connected') throw new Error('Link the phone first');
-    await this.sock.sendMessage(jid, {
+    await this.send(jid, {
       text: '✅ *Gatekeeper is connected to this group.*\nSend a seat to check it, e.g. *52 YY 14*, or type *Help*.',
     });
   }

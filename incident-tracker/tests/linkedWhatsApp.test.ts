@@ -33,17 +33,19 @@ vi.mock('../src/channels/baileys', async () => {
 const { LinkedWhatsApp, messageImage, messageText } = await import('../src/channels/linkedWhatsApp');
 
 const GROUP = '120363000000000001@g.us';
-type Sent = { jid: string; content: Record<string, unknown>; quoted: boolean };
+type Sent = { jid: string; content: Record<string, unknown>; quoted: boolean; id: string };
 
 function fakeSocket(sent: Sent[]) {
   return {
     user: { id: '447700900999:1@s.whatsapp.net' },
     ev: { on: () => undefined, removeAllListeners: () => undefined },
     sendMessage: async (jid: string, content: Record<string, unknown>, opts?: { quoted?: unknown }) => {
-      sent.push({ jid, content, quoted: Boolean(opts?.quoted) });
+      const id = `BOT${sent.length + 1}`; // WhatsApp gives every sent message an id
+      sent.push({ jid, content, quoted: Boolean(opts?.quoted), id });
+      return { key: { remoteJid: jid, fromMe: true, id } };
     },
     groupFetchAllParticipating: async () => ({
-      [GROUP]: { id: GROUP, subject: 'Stadium stewards', participants: [{ id: '111@lid', phoneNumber: '447700900111@s.whatsapp.net', admin: 'admin' }, { id: '222@lid' }] },
+      [GROUP]: { id: GROUP, subject: 'Stadium stewards', participants: [{ id: '111@lid', phoneNumber: '447700900111@s.whatsapp.net', admin: 'admin' }, { id: '222@lid' }, { id: '999@lid', phoneNumber: '447700900999@s.whatsapp.net' }] }, // 999 = the bot's own number
     }),
     requestPairingCode: async () => 'ABCDEFGH',
     logout: async () => undefined,
@@ -89,6 +91,7 @@ describe.skipIf(!HAS_DB)('linked WhatsApp bot routing (fake socket)', () => {
     const internals = wa as unknown as { sock: unknown; status: string };
     internals.sock = fakeSocket(sent);
     internals.status = 'connected';
+    wa.me = { id: '447700900999:1@s.whatsapp.net' }; // learnt on connecting: the bot's own number
     wa.groups = [{ jid: GROUP, subject: 'Stadium stewards' }];
   });
   afterAll(async () => {
@@ -139,12 +142,52 @@ describe.skipIf(!HAS_DB)('linked WhatsApp bot routing (fake socket)', () => {
     deliver(waMsg('999@g.us', { conversation: 'BB 212 100' }, { participant: '111@lid' }));
     deliver(waMsg('447700999999@s.whatsapp.net', { conversation: 'BB 212 100' }));
     deliver(waMsg(GROUP, { conversation: 'BB 212 100' }, { participant: '111@lid', ageS: 600 }));
-    const own = waMsg(GROUP, { conversation: 'BB 212 100' }, { participant: '111@lid' });
-    own.key.fromMe = true;
-    deliver(own);
     await settle();
     expect(sent).toEqual([]);
     expect(wa.seenGroups.has('999@g.us')).toBe(true);
+  });
+
+  it('answers what you type on the bot’s own phone', async () => {
+    const typed = waMsg(GROUP, { conversation: 'BB 212 100' });
+    typed.key.fromMe = true; // typed on the phone that holds the bot's number
+    deliver(typed);
+    await settle();
+    expect(sent).toHaveLength(1);
+    expect(sent[0].content.text).toContain('NOT REFUSED');
+  });
+
+  it('ignores what the bot’s phone sends to people privately, even with private chats on', async () => {
+    privateChatsOn();
+    const toFriend = waMsg('447700900111@s.whatsapp.net', { conversation: 'BB 212 100' });
+    toFriend.key.fromMe = true;
+    deliver(toFriend);
+    await settle();
+    expect(sent).toEqual([]);
+  });
+
+  it('never answers its own replies (no loops)', async () => {
+    deliver(waMsg(GROUP, { conversation: 'BB 212 100' }, { participant: '111@lid' }));
+    await settle();
+    expect(sent).toHaveLength(1);
+    // Even a bot message that reads like a command must never be answered.
+    const echo = waMsg(GROUP, { conversation: 'BB 212 100' });
+    echo.key.fromMe = true;
+    echo.key.id = sent[0].id; // WhatsApp echoes the bot's own message back
+    deliver(echo);
+    await settle();
+    expect(sent).toHaveLength(1);
+  });
+
+  it('can ignore the bot’s own phone again (WA_BOT_PHONE_COMMANDS off)', async () => {
+    process.env.WA_BOT_PHONE_COMMANDS = 'off';
+    resetConfigCache();
+    const typed = waMsg(GROUP, { conversation: 'BB 212 100' });
+    typed.key.fromMe = true;
+    deliver(typed);
+    await settle();
+    expect(sent).toEqual([]);
+    delete process.env.WA_BOT_PHONE_COMMANDS;
+    resetConfigCache();
   });
 
   it('answers group members in a private chat when private chats are on', async () => {

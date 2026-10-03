@@ -268,6 +268,7 @@ Then show your colleagues the table at the top of this page.
 | `WA_NIGHTLY_BACKUP` | on | 🗂️ Send the spreadsheet privately to group admins at `SUMMARY_TIME`. `off` to stop. |
 | `WA_HEALTH_ALERTS` | on | ✅ "online" message and 🔌/🪫 battery alerts to group admins. `off` to stop. |
 | `OCR_ENABLED` | on | 🎫 Read seats from ticket photos on the phone. `off` to stop (saves battery). Ticketmaster's mobile QR codes are encrypted, so the seat is read from the printed text. |
+| `WA_BOT_PHONE_COMMANDS` | on | Commands typed **on the phone that holds the bot's number** (in the group) work like anyone else's. They show under the bot's name. The bot never answers its own replies. `off` ignores that phone. |
 | `WA_PRIVATE_CHATS` | off | The bot (and its AI) only answer in the ticked group. `on` also answers private chats with the bot (needed for `REPORT` and voice notes). |
 | `WA_SUPERVISOR_ONLY` | on | `CLEAR` and `REPORT` only for group admins. `off` lets anyone in the group use them (not recommended: anyone could let a refused person in, or download everyone's descriptions). |
 

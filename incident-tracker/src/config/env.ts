@@ -67,6 +67,8 @@ const envObject = z.object({
   WA_SUPERVISOR_ONLY: onByDefault,
   // Answer private chats with the bot too (off = the bot, and its AI, work in the selected groups only).
   WA_PRIVATE_CHATS: offByDefault,
+  // Treat messages typed on the phone that holds the bot's number as commands ("off" = ignore them).
+  WA_BOT_PHONE_COMMANDS: onByDefault,
   // Private messages to group admins: the CSV at SUMMARY_TIME, and "online" / battery alerts.
   WA_NIGHTLY_BACKUP: onByDefault,
   WA_HEALTH_ALERTS: onByDefault,
