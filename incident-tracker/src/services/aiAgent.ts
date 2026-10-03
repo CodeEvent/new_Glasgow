@@ -90,8 +90,8 @@ export const TOOLS: Anthropic.Beta.BetaTool[] = [
         text: { type: 'string', description: 'Words to find in the description, reasons or notes, e.g. "red coat".' },
         section: { type: 'string', description: 'Exact section, e.g. "313".' },
         row: { type: 'string', description: 'Exact row within the section, e.g. "YY".' },
-        status: { type: 'string', enum: ['refused', 'ejected', 'sent_away', 'cooloff_ended', 'cleared', 'any'] },
-        hub: { type: 'string', enum: [...HUBS] },
+        status: { type: 'string', description: 'One of: refused, ejected, sent_away, cooloff_ended, cleared, any.' },
+        hub: { type: 'string', description: 'One of: East Hub, West Hub, South Hub, Hospitality Hub.' },
         since_minutes: { type: 'integer', description: 'Only records first logged within this many minutes.' },
         tried_another_hub: { type: 'boolean', description: 'Only people who tried a second hub.' },
       },
@@ -110,17 +110,17 @@ export const TOOLS: Anthropic.Beta.BetaTool[] = [
     input_schema: {
       type: 'object',
       properties: {
-        decision: { type: 'string', enum: ['refused', 'sent_away', 'ejected'] },
+        decision: { type: 'string', description: 'One of: refused, sent_away, ejected.' },
         section: { type: 'string' },
         row: { type: 'string' },
         seat: { type: 'string', description: 'Seat number.' },
-        hub: { type: 'string', enum: [...HUBS] },
-        reasons: { type: 'array', items: { type: 'string', enum: [...REASONS] } },
+        hub: { type: 'string', description: 'One of: East Hub, West Hub, South Hub, Hospitality Hub.' },
+        reasons: { type: 'array', items: { type: 'string' }, description: `Any of: ${REASONS.join(', ')}.` },
         other_reason: { type: 'string', description: 'What happened, when "Other" is one of the reasons.' },
-        gender: { type: 'string', enum: ['Male', 'Female'] },
-        height: { type: 'string', enum: [...HEIGHTS] },
-        build: { type: 'string', enum: [...BUILDS] },
-        age: { type: 'string', enum: [...AGES] },
+        gender: { type: 'string', description: 'Male or Female.' },
+        height: { type: 'string', description: `One of: ${HEIGHTS.join(', ')}.` },
+        build: { type: 'string', description: `One of: ${BUILDS.join(', ')}.` },
+        age: { type: 'string', description: `One of: ${AGES.join(', ')}.` },
         clothing: { type: 'string', description: 'What they are wearing, in the steward’s words.' },
         party_size: { type: 'integer', minimum: 1, maximum: 99 },
       },
@@ -139,10 +139,10 @@ export const DESCRIBE_TOOL: Anthropic.Beta.BetaTool = {
   input_schema: {
     type: 'object',
     properties: {
-      gender: { type: 'string', enum: ['Male', 'Female'] },
-      height: { type: 'string', enum: [...HEIGHTS] },
-      build: { type: 'string', enum: [...BUILDS] },
-      age: { type: 'string', enum: [...AGES] },
+      gender: { type: 'string', description: 'Male or Female.' },
+      height: { type: 'string', description: `One of: ${HEIGHTS.join(', ')}.` },
+      build: { type: 'string', description: `One of: ${BUILDS.join(', ')}.` },
+      age: { type: 'string', description: `One of: ${AGES.join(', ')}.` },
       clothing: { type: 'string' },
     },
     additionalProperties: false,
@@ -150,12 +150,11 @@ export const DESCRIBE_TOOL: Anthropic.Beta.BetaTool = {
 };
 
 export function toDescription(input: Record<string, unknown>): DescriptionFields | null {
-  const pick = <T extends string>(v: unknown, options: readonly T[]): T | undefined => options.find((o) => o === v);
   const d: DescriptionFields = {
-    gender: pick(input.gender, ['Male', 'Female'] as const),
-    height: pick(input.height, HEIGHTS),
-    build: pick(input.build, BUILDS),
-    age: pick(input.age, AGES),
+    gender: normGender(input.gender),
+    height: normHeight(input.height),
+    build: normBuild(input.build),
+    age: normAge(input.age),
     clothing: str(input.clothing, 300),
   };
   return Object.values(d).some(Boolean) ? d : null;
@@ -201,10 +200,64 @@ function recordForModel(r: RecordRow, now: Date): string {
   return parts.filter(Boolean).join(' · ');
 }
 
+// The AI's own wording -> the fixed options ("medium" -> "Average build", "drunk" -> "Intoxicated").
+const word = (v: unknown) => (typeof v === 'string' ? v.trim().toLowerCase() : '');
+export function normDecision(v: unknown): 'refused' | 'sent_away' | 'ejected' | undefined {
+  const w = word(v);
+  if (/eject|thrown|threw|removed|kicked/.test(w)) return 'ejected';
+  if (/sent|send|away|30|cool|come back|sober/.test(w)) return 'sent_away';
+  if (/refus|denied|turned|not let/.test(w)) return 'refused';
+  return undefined;
+}
+export function normHub(v: unknown): Hub | undefined {
+  const w = word(v);
+  return w.includes('hosp') ? 'Hospitality Hub' : HUBS.find((h) => w.startsWith(h.split(' ')[0].toLowerCase()));
+}
+export function normReason(v: unknown): (typeof REASONS)[number] | undefined {
+  const w = word(v);
+  const exact = REASONS.find((r) => r.toLowerCase() === w);
+  if (exact) return exact;
+  if (/minor|under ?18|child|kid|teen/.test(w)) return 'Intoxicated minor';
+  if (/drunk|intox|alcohol|steaming|smashed|wasted|slurr/.test(w)) return 'Intoxicated';
+  if (/abus|aggress|swear|threat|violen|rude|fight/.test(w)) return 'Abusive';
+  if (/influence|drug|high|stoned|substance/.test(w)) return 'Under the influence';
+  if (/possess|knife|weapon|blade|found|carrying/.test(w)) return 'Found in possession';
+  if (/other/.test(w)) return 'Other';
+  return undefined;
+}
+export function normGender(v: unknown): string | undefined {
+  const w = word(v);
+  if (/^(f\b|female|woman|women|girl|lady|she)/.test(w)) return 'Female';
+  if (/^(m\b|male|man|men|guy|lad|boy|gent|he\b)/.test(w)) return 'Male';
+  return undefined;
+}
+export function normHeight(v: unknown): string | undefined {
+  const w = word(v);
+  if (/short|small|little/.test(w)) return 'Short';
+  if (/average|medium|normal|mid/.test(w)) return 'Average height';
+  if (/tall|big|large/.test(w)) return 'Tall';
+  return undefined;
+}
+export function normBuild(v: unknown): string | undefined {
+  const w = word(v);
+  if (/slim|thin|skinny|small|slight/.test(w)) return 'Slim';
+  if (/average|medium|normal|mid/.test(w)) return 'Average build';
+  if (/heavy|large|big|stocky|fat|broad|well built/.test(w)) return 'Heavy';
+  return undefined;
+}
+export function normAge(v: unknown): string | undefined {
+  const w = word(v);
+  const n = /\d{1,2}/.exec(w);
+  if (n) return Number(n[0]) < 18 ? 'Minor (under 18)' : 'Adult';
+  if (/minor|under|child|kid|teen|young/.test(w)) return 'Minor (under 18)';
+  if (/adult|grown|over|man|woman/.test(w)) return 'Adult';
+  return undefined;
+}
+
 const str = (v: unknown, max = 100) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
 
 export async function searchRecords(input: Record<string, unknown>, now: Date): Promise<string> {
-  const hub = HUBS.find((h) => h === input.hub);
+  const hub = normHub(input.hub);
   let rows = await listRecords({ q: str(input.text), section: str(input.section, 16), row: str(input.row, 8), hub, breaches: input.tried_another_hub === true }, 500);
   const status = str(input.status);
   if (status && status !== 'any') rows = rows.filter((r) => statusWord(r, now).toLowerCase().replace(/[\s-]/g, '_').startsWith(status.replace('cooloff', 'cool_off')));
@@ -215,9 +268,9 @@ export async function searchRecords(input: Record<string, unknown>, now: Date): 
 }
 
 export function toDraft(input: Record<string, unknown>): AiDraft | null {
-  const decision = input.decision === 'sent_away' ? 'cool_off' : input.decision === 'refused' || input.decision === 'ejected' ? 'refused' : undefined;
-  const pick = <T extends string>(v: unknown, options: readonly T[]): T | undefined => options.find((o) => o === v);
-  const reasons = Array.isArray(input.reasons) ? [...new Set(input.reasons.map((r) => pick(r, REASONS)).filter((r): r is (typeof REASONS)[number] => !!r))] : [];
+  const said = normDecision(input.decision);
+  const decision = said === 'sent_away' ? 'cool_off' : said ? 'refused' : undefined;
+  const reasons = Array.isArray(input.reasons) ? [...new Set(input.reasons.map(normReason).filter((r): r is (typeof REASONS)[number] => !!r))] : [];
   const party = Number(input.party_size);
   const section = str(input.section, 6)?.toUpperCase();
   const row = str(input.row, 4)?.toUpperCase();
@@ -225,15 +278,15 @@ export function toDraft(input: Record<string, unknown>): AiDraft | null {
   const fullSeat = section && row && seat && /^\d{1,4}$/.test(seat);
   return {
     decision,
-    ejected: input.decision === 'ejected',
+    ejected: said === 'ejected',
     ...(fullSeat ? { section, row, seat } : {}),
-    hub: pick(input.hub, HUBS),
+    hub: normHub(input.hub),
     reasons: reasons.length ? reasons : undefined,
     otherReason: str(input.other_reason, 300),
-    gender: pick(input.gender, ['Male', 'Female'] as const),
-    height: pick(input.height, HEIGHTS),
-    build: pick(input.build, BUILDS),
-    age: pick(input.age, AGES),
+    gender: normGender(input.gender),
+    height: normHeight(input.height),
+    build: normBuild(input.build),
+    age: normAge(input.age),
     clothing: str(input.clothing, 300),
     party: Number.isInteger(party) && party > 1 && party < 100 ? party : undefined,
   };

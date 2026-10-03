@@ -98,6 +98,20 @@ describe.skipIf(!HAS_DB)('Groq helper (PostgreSQL)', () => {
     expect((await bot.handle(msg('dave', 'yes')))[0].text).toContain('✅ Logged');
   });
 
+  it('accepts the AI’s own wording for fixed options (no strict lists the service could reject)', async () => {
+    const { ai, requests } = agent([
+      call('draft_log', { decision: 'sent away', section: '313', row: 'yy', seat: '56', hub: 'west', reasons: ['drunk', 'Abusive', 'swearing'], gender: 'man', height: 'average', build: 'medium', age: 'about 25', clothing: 'green hat' }),
+    ]);
+    const res = await ai.handle('sent away a drunk lad 313 YY 56 West', 'dave');
+    expect(res).toMatchObject({
+      kind: 'draft',
+      draft: { decision: 'cool_off', hub: 'West Hub', reasons: ['Intoxicated', 'Abusive'], gender: 'Male', height: 'Average height', build: 'Average build', age: 'Adult', clothing: 'green hat' },
+    });
+    // The tool schema sent to the service has no strict lists for these fields.
+    const draftTool = (requests[0].body as { tools: Array<{ function: { name: string; parameters: { properties: Record<string, { enum?: unknown }> } } }> }).tools.find((t) => t.function.name === 'draft_log')!;
+    for (const f of ['decision', 'hub', 'gender', 'height', 'build', 'age']) expect(draftTool.function.parameters.properties[f].enum).toBeUndefined();
+  });
+
   it('reads descriptions and gives policy advice', async () => {
     const { ai } = agent([call('set_description', { gender: 'Male', height: 'Tall', build: 'Heavy', age: 'Adult', clothing: 'green hat' }), say('Suggestion: 30-minute cool-off.')]);
     expect(await ai.describe('tall heavy lad, green hat', 'dave')).toEqual({ gender: 'Male', height: 'Tall', build: 'Heavy', age: 'Adult', clothing: 'green hat' });
