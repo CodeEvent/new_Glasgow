@@ -16,7 +16,10 @@ export interface BaileysModule {
   DisconnectReason: Record<string, number>;
   Browsers: Record<string, (name: string) => [string, string, string]>;
   fetchLatestBaileysVersion: () => Promise<{ version: [number, number, number] }>;
-  downloadMediaMessage: (msg: WAMessage, type: 'buffer', options: Record<string, unknown>) => Promise<Buffer>;
+  downloadMediaMessage: {
+    (msg: WAMessage, type: 'buffer', options: Record<string, unknown>): Promise<Buffer>;
+    (msg: WAMessage, type: 'stream', options: Record<string, unknown>): Promise<NodeJS.ReadableStream & { destroy(): void }>;
+  };
 }
 
 export type OutgoingContent =

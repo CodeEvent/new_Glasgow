@@ -83,7 +83,7 @@ export function messageText(message: any): string | null {
 }
 
 /** The image part of a message (looking inside disappearing / view-once wrappers), if any. */
-export function messageImage(message: any): { mimetype?: string; caption?: string } | null {
+export function messageImage(message: any): { mimetype?: string; caption?: string; fileLength?: unknown } | null {
   let m = message;
   for (let i = 0; i < 4 && m; i++) {
     if (m.imageMessage) return m.imageMessage;
@@ -92,9 +92,37 @@ export function messageImage(message: any): { mimetype?: string; caption?: strin
   return null;
 }
 
+const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
+const MAX_VOICE_BYTES = 3 * 1024 * 1024; // ~3 minutes of WhatsApp voice
+
+class TooBigError extends Error {}
+
+/**
+ * Downloads media without ever holding more than `max` bytes: refuses files whose declared size is
+ * too big, and stops reading as soon as the real size passes the limit (the declared size comes
+ * from the sender's app, so it can be missing or wrong).
+ */
+async function downloadCapped(msg: WAMessage, declared: unknown, max: number): Promise<Buffer> {
+  const size = typeof declared === 'number' ? declared : Number((declared as { toNumber?: () => number })?.toNumber?.() ?? declared ?? 0);
+  if (size > max) throw new TooBigError();
+  const b = await loadBaileys();
+  const stream = await b.downloadMediaMessage(msg, 'stream', {});
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of stream as AsyncIterable<Buffer>) {
+    total += chunk.length;
+    if (total > max) {
+      stream.destroy();
+      throw new TooBigError();
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
 /** A voice note or audio clip (unwrapping ephemeral messages). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function messageAudio(message: any): { mimetype?: string; seconds?: number } | null {
+export function messageAudio(message: any): { mimetype?: string; seconds?: number; fileLength?: unknown } | null {
   let m = message;
   for (let i = 0; i < 4 && m; i++) {
     if (m.audioMessage) return m.audioMessage;
@@ -307,9 +335,12 @@ export class LinkedWhatsApp {
       let image: { data: Buffer; mime: string } | null = null;
       if (img) {
         try {
-          const b = await loadBaileys();
-          image = { data: await b.downloadMediaMessage(msg, 'buffer', {}), mime: img.mimetype ?? 'image/jpeg' };
+          image = { data: await downloadCapped(msg, img.fileLength, MAX_PHOTO_BYTES), mime: img.mimetype ?? 'image/jpeg' };
         } catch (err) {
+          if (err instanceof TooBigError) {
+            await this.sock?.sendMessage(jid, { text: '⚠️ That photo is too big (max 8 MB). Send a normal photo or a screenshot.' }, { quoted: msg });
+            return note('photo too big, not downloaded');
+          }
           console.error('[linked-wa] could not download photo:', (err as Error).message);
           note('photo could not be downloaded');
           await this.sock?.sendMessage(
@@ -325,14 +356,18 @@ export class LinkedWhatsApp {
       let audio: { data: Buffer; mime: string } | null = null;
       if (voice) {
         if (isGroup) return note('voice note in a group, ignored');
-        if ((voice.seconds ?? 0) > 120) {
+        const tooLong = async () => {
           await this.sock?.sendMessage(jid, { text: '🎙️ That voice note is too long. Keep it under a minute, or type it.' }, { quoted: msg });
           return note('voice note too long');
-        }
-        try {
-          const b = await loadBaileys();
-          audio = { data: await b.downloadMediaMessage(msg, 'buffer', {}), mime: voice.mimetype ?? 'audio/ogg' };
+        };
+        if ((voice.seconds ?? 0) > 120) return tooLong();
+        if (!this.bot.ai?.handleAudio) {
+          // The bot will explain voice notes need the Gemini AI: no need to fetch the recording.
+          audio = { data: Buffer.alloc(0), mime: voice.mimetype ?? 'audio/ogg' };
+        } else try {
+          audio = { data: await downloadCapped(msg, voice.fileLength, MAX_VOICE_BYTES), mime: voice.mimetype ?? 'audio/ogg' };
         } catch (err) {
+          if (err instanceof TooBigError) return tooLong();
           console.error('[linked-wa] could not download voice note:', (err as Error).message);
           return note('voice note could not be downloaded');
         }

@@ -4,10 +4,30 @@ import { closePool } from '../src/db/pool';
 import { HAS_DB, resetDatabase, tempOfflineLog } from './helpers';
 
 // WhatsApp media downloads go to WhatsApp's servers; return a known image instead.
-const media = { buffer: Buffer.alloc(0), downloads: 0 };
-vi.mock('../src/channels/baileys', () => ({
-  loadBaileys: async () => ({ downloadMediaMessage: async () => (media.downloads++, media.buffer) }),
-}));
+const media = { buffer: Buffer.alloc(0), downloads: 0, bytesSent: 0 };
+vi.mock('../src/channels/baileys', async () => {
+  const { Readable } = await import('stream');
+  return {
+    loadBaileys: async () => ({
+      downloadMediaMessage: async (_m: unknown, type: string) => {
+        media.downloads++;
+        if (type !== 'stream') return media.buffer;
+        // Stream in 64 KB chunks, counting what the reader actually pulled.
+        const buf = media.buffer;
+        let at = 0;
+        return new Readable({
+          read() {
+            if (at >= buf.length) return this.push(null);
+            const chunk = buf.subarray(at, at + 65536);
+            at += chunk.length;
+            media.bytesSent += chunk.length;
+            this.push(chunk);
+          },
+        });
+      },
+    }),
+  };
+});
 
 const { LinkedWhatsApp, messageImage, messageText } = await import('../src/channels/linkedWhatsApp');
 
@@ -133,6 +153,39 @@ describe.skipIf(!HAS_DB)('linked WhatsApp bot routing (fake socket)', () => {
     expect(sent.map((m) => m.jid)).toEqual(['447700900111@s.whatsapp.net', '447700900111@s.whatsapp.net']);
     expect(sent[0].content.text).toBe('🗂️ backup');
     expect(sent[1].content.fileName).toBe('x.csv');
+  });
+
+  it('never downloads media bigger than the limits', async () => {
+    (wa as unknown as { bot: { ai: unknown } }).bot.ai = {
+      handle: async () => ({ kind: 'answer', text: 'x' }),
+      handleAudio: async () => ({ kind: 'answer', text: 'heard' }),
+    };
+    media.downloads = 0;
+    // Declared too big: refused without downloading.
+    deliver(waMsg('447700900111@s.whatsapp.net', { audioMessage: { mimetype: 'audio/ogg', seconds: 5, fileLength: 20_000_000 } }));
+    deliver(waMsg(GROUP, { imageMessage: { mimetype: 'image/jpeg', fileLength: 50_000_000, caption: 'REFUSED BB 212 100 West' } }, { participant: '111@lid' }));
+    await settle();
+    expect(media.downloads).toBe(0);
+    expect(sent.map((m) => m.content.text).join('\n')).toMatch(/voice note is too long/);
+    expect(sent.map((m) => m.content.text).join('\n')).toMatch(/photo is too big/);
+
+    // Size not declared (or lied about): the download stops at the limit.
+    sent.length = 0;
+    media.buffer = Buffer.alloc(12 * 1024 * 1024, 1);
+    media.bytesSent = 0;
+    deliver(waMsg('447700900111@s.whatsapp.net', { audioMessage: { mimetype: 'audio/ogg', fileLength: 1000 } }));
+    await settle();
+    expect(media.bytesSent).toBeLessThan(4 * 1024 * 1024); // stopped near the 3 MB voice limit, not 12 MB
+    expect(sent[0].content.text).toMatch(/voice note is too long/);
+  });
+
+  it('does not download voice notes when the AI can’t listen', async () => {
+    (wa as unknown as { bot: { ai: unknown } }).bot.ai = { handle: async () => ({ kind: 'answer', text: 'x' }) };
+    media.downloads = 0;
+    deliver(waMsg('447700900111@s.whatsapp.net', { audioMessage: { mimetype: 'audio/ogg', seconds: 4 } }));
+    await settle();
+    expect(media.downloads).toBe(0);
+    expect(sent[0].content.text).toContain('Voice notes need the Gemini AI');
   });
 
   it('listens to voice notes only in private chats', async () => {
