@@ -119,10 +119,10 @@ export async function getNotes(ticketId: string): Promise<TicketNote[]> {
 }
 
 /** Adds a note and counts it as activity on the record (so the 24h retention restarts). */
-export async function addNote(ticketId: string, author: string, body: string): Promise<void> {
+export async function addNote(ticketId: string, author: string, body: string, at: Date = new Date()): Promise<void> {
   const text = body.trim().slice(0, 500);
   if (!text) throw new Error('Empty note');
-  await getPool().query('INSERT INTO ticket_notes (ticket_id, author, body) VALUES ($1, $2, $3)', [ticketId, author.slice(0, 100) || 'Steward', text]);
+  await getPool().query('INSERT INTO ticket_notes (ticket_id, author, body, created_at) VALUES ($1, $2, $3, $4)', [ticketId, author.slice(0, 100) || 'Steward', text, at]);
   await getPool().query('UPDATE tickets SET party_size = party_size WHERE ticket_id = $1', [ticketId]); // fires the updated_at trigger
 }
 

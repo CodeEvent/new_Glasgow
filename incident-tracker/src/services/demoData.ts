@@ -34,9 +34,13 @@ export async function resetRecords(opts: { demo: boolean }, now = Date.now()): P
   const { rowCount } = await getPool().query('DELETE FROM tickets'); // cascades to history, photos and notes
   if (!opts.demo) return { deleted: rowCount ?? 0, created: 0 };
 
-  const bot = new StewardBot(() => now); // its own bot: no AI, OCR, alerts or shift hubs involved
+  // Its own bot (no AI, OCR, alerts or shift hubs), with a clock set to each step's time, so
+  // clears and notes get realistic times too.
+  let clock = now;
+  const bot = new StewardBot(() => clock);
   for (const [ago, who, text] of SCRIPT) {
-    await bot.handle({ chatId: 'demo@g.us', senderId: `demo-${who}`, senderName: `Demo · ${who}`, text, at: new Date(now - ago * MIN) });
+    clock = now - ago * MIN;
+    await bot.handle({ chatId: 'demo@g.us', senderId: `demo-${who}`, senderName: `Demo · ${who}`, text, at: new Date(clock) });
   }
   const { rows } = await getPool().query<{ n: number }>('SELECT count(*)::int AS n FROM tickets');
   return { deleted: rowCount ?? 0, created: rows[0].n };

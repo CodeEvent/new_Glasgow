@@ -59,6 +59,17 @@ describe.skipIf(!HAS_DB)('demo data (PostgreSQL)', () => {
     expect((await q('SELECT count(*)::int AS n FROM scan_events WHERE is_breach_event'))[0].n).toBeGreaterThan(0);
   });
 
+  it('dates every demo action in the past, like a real night', async () => {
+    const before = Date.now();
+    await reset({ confirm: 'DELETE ALL' });
+    const cleared = (await q("SELECT description FROM tickets WHERE section = '12'"))[0].description as string;
+    const at = /Cleared by Demo · Sam (\d\d:\d\d)/.exec(cleared)?.[1];
+    const fmt = (t: number) => new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' }).format(new Date(t));
+    expect(at).toBe(fmt(before - 65 * 60_000)); // cleared 65 minutes before loading, not "now"
+    const notes = await q('SELECT created_at FROM ticket_notes');
+    for (const n of notes) expect(new Date(n.created_at as string).getTime()).toBeLessThan(before - 30 * 60_000);
+  });
+
   it('can just clear, without loading demo records', async () => {
     await reset({ confirm: 'DELETE ALL' });
     const res = await reset({ confirm: 'DELETE ALL', demo: false });

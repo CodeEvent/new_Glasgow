@@ -24,7 +24,9 @@ export function formatQuickCheck(
 
   let head: string;
   if (p.current_status === 'completely_refused') {
-    head = `🔴 *REFUSED* · ${where}\n⛔ Do not admit.`;
+    head = /^Ejected/.test(p.reasoning ?? '')
+      ? `⛔ *EJECTED* · ${where}\n⛔ Removed from inside. Do not admit.`
+      : `🔴 *REFUSED* · ${where}\n⛔ Do not admit.`;
   } else if (p.current_status === 'cooling_off') {
     head = p.mins_left
       ? `🟠 *COOLING OFF* · ${where}\n⛔ Not before ${p.cool_down_until ? formatClock(p.cool_down_until) : '?'} (${p.mins_left} min left).`

@@ -364,6 +364,13 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
     expect((await bot.handle(msg('sarah', 'STATS')))[0].text).toContain('*Reasons:* Abusive 2 · Intoxicated 1');
   });
 
+  it('shows EJECTED when the seat is checked', async () => {
+    await bot.handle(msg('dave', 'EJECTED 313 YY 57 West 2 -'));
+    const [c] = await bot.handle(msg('sarah', '313 YY 57'));
+    expect(c.text).toContain('⛔ *EJECTED*');
+    expect(c.text).not.toContain('🔴 *REFUSED*');
+  });
+
   it('EDIT re-asks reasons and description: own last log, or group admins', async () => {
     await bot.handle(msg('dave', 'REFUSED 313 YY 56 West 1 M 3 2 adult green hat'));
     bot.canSupervise = async (id) => id === 'sarah';

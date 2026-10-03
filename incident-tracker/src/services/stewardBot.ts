@@ -1120,7 +1120,7 @@ export class StewardBot {
     try {
       const f = await this.findBySeat(`${sp.seat.section} ${sp.seat.row} ${sp.seat.seat}`);
       if (!f.profile) return f.error!;
-      await addNote(f.profile.ticket_id, (m.senderName || 'Steward').slice(0, 100), sp.rest);
+      await addNote(f.profile.ticket_id, (m.senderName || 'Steward').slice(0, 100), sp.rest, new Date(this.now()));
       return `🗒️ Note added to *${f.label}*.`;
     } catch (err) {
       console.error('[steward-bot] note failed:', (err as Error).message);
