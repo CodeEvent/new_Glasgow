@@ -13,7 +13,7 @@ Stewards log and check refused patrons entirely inside your **work WhatsApp grou
 The bot asks for anything missing, one question at a time, with numbered options:
 
 1. **Refused entry, or sent away for 30 minutes?** 1 Refused entry · 2 Sent away 30 min
-2. **Seat**, e.g. `52 YY 14` (section, row, seat), and **hub** (remembered for the night)
+2. **Seat**, e.g. `52 YY 14` (section, row, seat), and **hub**: 1 East · 2 West · 3 South · 4 Hospitality (asked every time; the bot shows your last hub as a hint)
 3. **Reasons** (one or more, e.g. `1 3 5`): 1 Intoxicated · 2 Abusive · 3 Under the influence · 4 Intoxicated minor · 5 Found in possession · 6 Other. If 6 is picked, the bot asks "What happened?" and records the answer.
 4. **Male or female:** M or F
 5. **Height:** 1 Short · 2 Average · 3 Tall
@@ -21,7 +21,7 @@ The bot asks for anything missing, one question at a time, with numbered options
 7. **Minor or adult:** 1 Adult · 2 Minor (under 18)
 8. **What they're wearing:** free text
 
-Reply `-` to skip a description question (4 to 8). Quick stewards can put it all on one line in that order: decision, seat, hub, reasons, M/F, height, build, adult/minor, clothing, e.g. `REFUSED 52 YY 14 West 1 3 M 3 2 adult green hat`. The time is added automatically. `UNDO` removes your last record, `CANCEL` stops a half-finished log, and `HELP` shows the commands.
+Reply `-` to skip a description question (4 to 8). Quick stewards can put it all on one line in that order: decision, seat, hub, reasons, M/F, height, build, adult/minor, clothing, e.g. `REFUSED 52 YY 14 West 1 3 M 3 2 adult green hat`. The time is added automatically. `BACK` reopens the previous question so you can change your answer, `CANCEL` stops a half-finished log, `UNDO` removes your last saved record (within 15 minutes), and `HELP` shows the commands.
 
 **Everything is deleted automatically after 24 hours.**
 

@@ -16,9 +16,10 @@ import { getTicketProfile, getTicketProfileBySeat } from './ticketLookup';
  *         Anything missing is asked for, one question at a time, with numbered options:
  *         refused/sent away, seat, hub, reasons (several allowed; "Other" asks what happened),
  *         then male/female, height, build, minor/adult and clothing.
- *         The time is the message time. Each steward's hub is remembered.
+ *         The time is the message time. The hub is asked every time (last one shown as a hint).
  *  Check: "BB 212 100" -> refused / sent away / not on record, with the photo if there is one.
- *  Also:  UNDO (remove your last new record), CANCEL (drop a half-finished log), HELP.
+ *  Also:  BACK (reopen the previous question), UNDO (remove your last new record),
+ *         CANCEL (drop a half-finished log), HELP.
  */
 
 export type Decision = 'refused' | 'cool_off';
@@ -241,7 +242,23 @@ interface Pending extends ParsedLog {
   ticketCode?: string;
   photo?: { data: Buffer; mime: string };
   asked?: Field;
+  /** Questions asked so far, each with the answers as they were just before it, so BACK can rewind. */
+  history?: Array<{ field: Field; before: Answers }>;
   startedAt: number;
+}
+
+const ANSWER_KEYS = ['decision', 'section', 'row', 'seat', 'hub', 'reasons', 'otherReason', 'gender', 'height', 'build', 'age', 'clothing'] as const;
+type Answers = Partial<Pick<Pending, (typeof ANSWER_KEYS)[number]>>;
+
+function snapshot(p: Pending): Answers {
+  const out: Answers = {};
+  for (const k of ANSWER_KEYS) if (p[k] !== undefined) (out as Record<string, unknown>)[k] = Array.isArray(p[k]) ? [...(p[k] as string[])] : p[k];
+  return out;
+}
+
+function restore(p: Pending, a: Answers): void {
+  for (const k of ANSWER_KEYS) delete p[k];
+  Object.assign(p, a);
 }
 
 interface LastLog {
@@ -260,7 +277,7 @@ const SKIP = '\n_(*-* to skip)_';
 const PROMPTS: Record<Field, string> = {
   decision: 'Refused entry, or sent away for 30 minutes? Reply with a number:\n*1* Refused entry\n*2* Sent away 30 min',
   seat: 'Which seat? Send section, row and seat, e.g. *52 YY 14*.',
-  hub: 'Which hub are you at? *East*, *West*, *South* or *Hospitality*.',
+  hub: `Which hub are you at? Reply with a number:\n${numbered(HUBS.map((h) => h.replace(' Hub', '')))}`,
   reasons: `Reason? Reply with a number:\n${numbered(REASONS)}\n_More than one? Send all the numbers, e.g. *1 3 5*_`,
   other: 'You picked *Other*. What happened? Describe it in your own words.',
   gender: `Male or female? Reply *M* or *F*.${SKIP}`,
@@ -286,6 +303,29 @@ export class StewardBot {
     return h && this.now() - h.at < HUB_MEMORY_MS ? h.hub : undefined;
   }
 
+  /** The question, with the steward's last hub as a hint and how to go back or stop. */
+  private prompt(field: Field, p: Pending, senderId: string): string {
+    let text = PROMPTS[field];
+    const last = field === 'hub' ? this.rememberedHub(senderId) : undefined;
+    if (last) text += `\n_Last time: *${last.replace(' Hub', '')}* (reply *${HUBS.indexOf(last) + 1}*)_`;
+    const canGoBack = (p.history?.length ?? 0) > 1 || (p.history?.length === 1 && p.history[0].field !== field);
+    return `${text}\n_${canGoBack ? '*BACK* to change your last answer · ' : ''}*CANCEL* to stop_`;
+  }
+
+  /** BACK: reopen the previous question, forgetting that answer and anything after it. */
+  private back(p: Pending, senderId: string): string {
+    const h = p.history ?? [];
+    if (h.length && h[h.length - 1].field === p.asked) h.pop(); // the question on screen now
+    const prev = h[h.length - 1];
+    if (!prev) {
+      if (p.asked) h.push({ field: p.asked, before: snapshot(p) });
+      return `Nothing to go back to.\n${this.prompt(p.asked ?? 'decision', p, senderId)}`;
+    }
+    restore(p, prev.before);
+    p.asked = prev.field;
+    return `↩️ ${this.prompt(prev.field, p, senderId)}`;
+  }
+
   /** Handle one incoming message. Returns the replies to post (empty = stay quiet). */
   async handle(m: InboundMessage): Promise<OutboundReply[]> {
     const text = (m.text ?? '').trim();
@@ -301,6 +341,7 @@ export class StewardBot {
       this.pending.delete(k);
       return [{ text: 'Cancelled. Nothing was saved.' }];
     }
+    if (/^(back|prev|previous)$/i.test(text)) return p ? [{ text: this.back(p, m.senderId) }] : [];
     if (/^undo$/i.test(text)) return [{ text: await this.undo(m.senderId) }];
     if (/^(help|\?|menu)$/i.test(text)) return [{ text: STEWARD_HELP }];
 
@@ -337,7 +378,7 @@ export class StewardBot {
     if (p) {
       const answered = this.applyAnswer(p, text);
       if (answered) return this.advance(m, p);
-      return [{ text: `${PROMPTS[p.asked ?? this.nextMissing(p, m.senderId) ?? 'reasons']}\n_(or CANCEL)_` }];
+      return [{ text: this.prompt(p.asked ?? this.nextMissing(p) ?? 'reasons', p, m.senderId) }];
     }
 
     // ---- a check: "BB 212 100" or "Check TM-…"
@@ -360,6 +401,8 @@ export class StewardBot {
       if (s) return Object.assign(p, s), true;
     }
     if (asked === 'hub' || !p.hub) {
+      const n = asked === 'hub' ? /^([1-4])$/.exec(text) : null;
+      if (n) return (p.hub = HUBS[Number(n[1]) - 1]), true;
       const h = parseHub(text);
       if (h && text.replace(HUB_RE, '').trim() === '') return (p.hub = h), true;
     }
@@ -382,10 +425,10 @@ export class StewardBot {
     return false;
   }
 
-  private nextMissing(p: Pending, senderId: string): Field | null {
+  private nextMissing(p: Pending): Field | null {
     if (!p.decision) return 'decision';
     if (!p.seat) return 'seat';
-    if (!p.hub && !this.rememberedHub(senderId)) return 'hub';
+    if (!p.hub) return 'hub';
     if (!p.reasons?.length) return 'reasons';
     if (p.reasons.includes('Other') && p.otherReason === undefined) return 'other';
     for (const f of DESCRIPTION_FIELDS) if (p[f] === undefined) return f;
@@ -393,10 +436,13 @@ export class StewardBot {
   }
 
   private async advance(m: InboundMessage, p: Pending, intro?: string): Promise<OutboundReply[]> {
-    const missing = this.nextMissing(p, m.senderId);
+    const missing = this.nextMissing(p);
     if (missing) {
       p.asked = missing;
-      return [{ text: intro ? `${intro} ${PROMPTS[missing]}` : PROMPTS[missing] }];
+      p.history ??= [];
+      if (p.history[p.history.length - 1]?.field !== missing) p.history.push({ field: missing, before: snapshot(p) });
+      const q = this.prompt(missing, p, m.senderId);
+      return [{ text: intro ? `${intro} ${q}` : q }];
     }
     this.pending.delete(this.key(m));
     return [{ text: await this.commit(m, p) }];
@@ -405,7 +451,7 @@ export class StewardBot {
   // ---------------------------------------------------------------- saving
 
   private async commit(m: InboundMessage, p: Pending): Promise<string> {
-    const hub = p.hub ?? this.rememberedHub(m.senderId)!;
+    const hub = p.hub!;
     this.hubs.set(m.senderId, { hub, at: this.now() });
     const at = m.at ?? new Date(this.now());
     const parsed = scanInputSchema.safeParse({
@@ -445,7 +491,7 @@ export class StewardBot {
     if (outcome.scenario === 'NEW_INCIDENT' && !outcome.previousStatus) {
       this.lastLogs.set(m.senderId, { ticketId: ticket.ticket_id, createdTicket: true, at: this.now() });
     }
-    return confirmation(outcome, hub, p, !p.hub);
+    return confirmation(outcome, hub, p);
   }
 
   private async undo(senderId: string): Promise<string> {
@@ -501,14 +547,13 @@ function reasonText(p: Pending): string | undefined {
   return p.reasons.map((r) => (r === 'Other' && p.otherReason ? `Other: ${p.otherReason}` : r)).join(', ');
 }
 
-function confirmation(o: ScanOutcome, hub: Hub, p: Pending, hubWasRemembered: boolean): string {
+function confirmation(o: ScanOutcome, hub: Hub, p: Pending): string {
   const t = o.ticket!;
   const seat = `${t.section ?? p.section} ${t.row_label ?? p.row} ${t.seat_number ?? p.seat}`;
   const when = formatClock(o.evaluatedAt);
   const reason = reasonText(p);
   const desc = describe(p);
   const notes = (reason ? `\n📝 ${sanitize(reason, 200)}` : '') + (desc ? `\n👤 ${sanitize(desc, 200)}` : '');
-  const hubNote = hubWasRemembered ? `\n_Hub: ${hub} (remembered). Add EAST/WEST/SOUTH/HOSP to change._` : '';
   const origin = o.originEvent;
 
   switch (o.scenario) {
@@ -528,8 +573,7 @@ function confirmation(o: ScanOutcome, hub: Hub, p: Pending, hubWasRemembered: bo
           ? `✅ Logged 🟠 *SENT AWAY 30 MIN* · ${seat}\n${hub} ${when} · back after ${t.cool_down_until ? formatClock(t.cool_down_until) : '?'}`
           : `✅ Logged 🔴 *REFUSED* · ${seat}\n${hub} ${when}`) +
         notes +
-        `\n_Reply UNDO within 15 min if this was a mistake._` +
-        hubNote
+        `\n_Reply UNDO within 15 min if this was a mistake._`
       );
   }
 }
@@ -539,8 +583,8 @@ export const STEWARD_HELP =
   '*Check a seat:* send section, row, seat, e.g. *52 YY 14*\n\n' +
   '*Log someone:* send *REFUSED 52 YY 14 West* or *30 52 YY 14 West* (sent away 30 min), ' +
   'or a photo of them or their ticket QR with the seat as the caption, or just *LOG*.\n' +
-  'I’ll then ask: reasons, male/female, height, build, minor or adult, and what they’re wearing. ' +
-  'Your hub is remembered.\n\n' +
+  'I’ll then ask: hub, reasons, male/female, height, build, minor or adult, and what they’re wearing.\n' +
+  '*BACK*: change your last answer · *CANCEL*: stop a log\n\n' +
   `*Reasons* (send one or more, e.g. *1 3 5*): ${REASONS.map((r, i) => `${i + 1} ${r}`).join(' · ')}\n\n` +
-  '*UNDO*: remove your last record · *CANCEL*: stop a log\n' +
+  '*UNDO*: remove your last saved record (within 15 min)\n' +
   '_Records are deleted automatically after 24 hours._';

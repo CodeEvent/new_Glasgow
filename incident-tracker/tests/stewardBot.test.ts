@@ -132,7 +132,7 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
     expect(c.text).toContain('by Dave');
   });
 
-  it('walks a steward through a QR photo step by step, remembering their hub next time', async () => {
+  it('walks a steward through a QR photo step by step, asking the hub every time', async () => {
     const [a] = await bot.handle(msg('dave', null, { image: { data: await qrPng(SAFETIX), mime: 'image/png' } }));
     expect(a.text).toContain('🎟️ Ticket QR read.');
     expect(a.text).toContain('Refused entry, or sent away for 30 minutes?');
@@ -140,7 +140,8 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
     expect(b.text).toContain('Which seat?');
     const [c] = await bot.handle(msg('dave', 'BB 212 100'));
     expect(c.text).toContain('Which hub');
-    const [d] = await bot.handle(msg('dave', 'west'));
+    expect(c.text).toContain('*4* Hospitality');
+    const [d] = await bot.handle(msg('dave', '2'));
     expect(d.text).toContain('Reason?');
     expect(d.text).toContain('*4* Intoxicated minor');
     expect(d.text).toContain('e.g. *1 3 5*');
@@ -160,10 +161,13 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
     expect(rows[0].ticket_id).toMatch(/^QR-/);
     expect(rows[0].seat_key).toBe('BB|212|100');
 
-    // Next log from Dave: hub isn't asked again.
+    // Next log from Dave: the hub is asked again, with his last one as a hint.
     const [f] = await bot.handle(msg('dave', 'REFUSED C 4 22 2 -'));
-    expect(f.text).toContain('✅ Logged 🔴 *REFUSED* · C 4 22');
-    expect(f.text).toContain('Hub: West Hub (remembered)');
+    expect(f.text).toContain('Which hub');
+    expect(f.text).toContain('Last time: *West* (reply *2*)');
+    const [g] = await bot.handle(msg('dave', 'south'));
+    expect(g.text).toContain('✅ Logged 🔴 *REFUSED* · C 4 22');
+    expect(g.text).toContain('South Hub');
   });
 
   it('stores the customer photo and sends it back with a check', async () => {
@@ -191,6 +195,38 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
     const [r] = await bot.handle(msg('dave', 'F 2 3 -'));
     expect(r.text).toContain('📝 Abusive, Other: threw a bottle');
     expect(r.text).toContain('👤 Female · Average height · Heavy');
+  });
+
+  it('BACK reopens the previous question and forgets that answer', async () => {
+    await bot.handle(msg('dave', 'REFUSED 52 YY 14 West'));
+    expect((await bot.handle(msg('dave', 'back')))[0].text).toContain('Nothing to go back to');
+    expect((await bot.handle(msg('dave', '3 4 5')))[0].text).toContain('*BACK* to change your last answer');
+    expect((await bot.handle(msg('dave', 'm')))[0].text).toContain('Height?');
+    // Wrong gender: go back, fix it.
+    const [b1] = await bot.handle(msg('dave', 'BACK'));
+    expect(b1.text).toContain('↩️ Male or female?');
+    expect((await bot.handle(msg('dave', 'f')))[0].text).toContain('Height?');
+    // Back twice: change the reasons too.
+    await bot.handle(msg('dave', 'back'));
+    expect((await bot.handle(msg('dave', 'back')))[0].text).toContain('↩️ Reason?');
+    await bot.handle(msg('dave', '1 2'));
+    await bot.handle(msg('dave', 'f'));
+    await bot.handle(msg('dave', '1'));
+    await bot.handle(msg('dave', '1'));
+    await bot.handle(msg('dave', '1'));
+    const [r] = await bot.handle(msg('dave', 'red coat'));
+    expect(r.text).toContain('📝 Intoxicated, Abusive');
+    expect(r.text).toContain('👤 Female · Short · Slim · Adult · red coat');
+  });
+
+  it('BACK after a one-line answer forgets everything that answer filled in', async () => {
+    await bot.handle(msg('dave', 'LOG'));
+    await bot.handle(msg('dave', '2'));
+    await bot.handle(msg('dave', '52 YY 14'));
+    await bot.handle(msg('dave', '1'));
+    expect((await bot.handle(msg('dave', '1 M 3')))[0].text).toContain('Build?'); // reasons, gender and height in one go
+    expect((await bot.handle(msg('dave', 'back')))[0].text).toContain('↩️ Reason?');
+    expect((await bot.handle(msg('dave', '2')))[0].text).toContain('Male or female?'); // gender was forgotten too
   });
 
   it('starts a log with LOG or a photo captioned with the seat, asking every question', async () => {
