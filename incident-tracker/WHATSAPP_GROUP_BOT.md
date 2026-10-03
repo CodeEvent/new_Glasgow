@@ -4,20 +4,24 @@ Stewards log and check refused patrons entirely inside your **work WhatsApp grou
 
 | A steward sends | Gatekeeper replies |
 |---|---|
-| a photo of the customer's Ticketmaster QR, or of the customer, captioned `REFUSED 52 YY 14 West` | asks the reason, male/female, build and clothing, then ✅ Logged 🔴 REFUSED · 52 YY 14 · West Hub 18:45 |
-| `30 52 YY 14 West 1 M 2 green hat` (all in one go) | ✅ Logged 🟠 SENT AWAY 30 MIN · 52 YY 14 · back after 19:15 |
-| `52 YY 14` | 🔴 REFUSED … with the description, who logged it, where and when, plus the photo |
+| `REFUSED 52 YY 14 West`, or a photo of the customer or their Ticketmaster QR captioned `52 YY 14`, or just `LOG` | asks the questions below, then ✅ Logged 🔴 REFUSED · 52 YY 14 · West Hub 18:45 |
+| `30 52 YY 14 West 1 3 M 3 2 adult green hat` (all in one go) | ✅ Logged 🟠 SENT AWAY 30 MIN · 52 YY 14 · back after 19:15 |
+| `52 YY 14` | 🔴 REFUSED … with the reasons, description, who logged it, where and when, plus the photo |
 | `52 YY 14` (nothing logged) | ✅ NOT REFUSED |
 | a log for a seat already flagged at another hub | 🚨 ALREADY REFUSED … second attempt, ⛔ do not admit |
 
-If a log is missing anything, the bot asks for it, one question at a time, with numbered options:
+The bot asks for anything missing, one question at a time, with numbered options:
 
-- **Reason:** 1 Intoxicated · 2 Abusive · 3 Under the influence · 4 Intoxicated minor · 5 Found in possession · 6 Other (then "What happened?")
-- **Male or female:** M or F
-- **Build:** 1 Slim · 2 Average · 3 Heavy
-- **What they're wearing:** free text
+1. **Refused entry, or sent away for 30 minutes?** 1 Refused entry · 2 Sent away 30 min
+2. **Seat**, e.g. `52 YY 14` (section, row, seat), and **hub** (remembered for the night)
+3. **Reasons** (one or more, e.g. `1 3 5`): 1 Intoxicated · 2 Abusive · 3 Under the influence · 4 Intoxicated minor · 5 Found in possession · 6 Other. If 6 is picked, the bot asks "What happened?" and records the answer.
+4. **Male or female:** M or F
+5. **Height:** 1 Short · 2 Average · 3 Tall
+6. **Build:** 1 Slim · 2 Average · 3 Heavy
+7. **Minor or adult:** 1 Adult · 2 Minor (under 18)
+8. **What they're wearing:** free text
 
-Reply `-` to skip a description question. Quick stewards can put it all on one line: decision, seat, hub, reason, M/F, build, clothing, e.g. `REFUSED 52 YY 14 West 1 M 2 green hat`. The time is added automatically. Each steward's hub is remembered for the night. `UNDO` removes your last record, `CANCEL` stops a half-finished log, and `HELP` shows the commands.
+Reply `-` to skip a description question (4 to 8). Quick stewards can put it all on one line in that order: decision, seat, hub, reasons, M/F, height, build, adult/minor, clothing, e.g. `REFUSED 52 YY 14 West 1 3 M 3 2 adult green hat`. The time is added automatically. `UNDO` removes your last record, `CANCEL` stops a half-finished log, and `HELP` shows the commands.
 
 **Everything is deleted automatically after 24 hours.**
 

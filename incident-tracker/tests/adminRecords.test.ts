@@ -55,7 +55,7 @@ describe.skipIf(!HAS_DB)('records API (PostgreSQL)', () => {
     tempOfflineLog();
     await resetDatabase();
     bot = new StewardBot();
-    await say('d', 'REFUSED 52 YY 14 West 1 M 2 green hat');
+    await say('d', 'REFUSED 52 YY 14 West 1 M 2 2 adult green hat');
     await say('d', '30 BB 1 2 West 2 -');
     await say('s', '30 BB 1 2 South 2 -'); // hub-hop
   });
@@ -69,7 +69,7 @@ describe.skipIf(!HAS_DB)('records API (PostgreSQL)', () => {
     expect(res.body.records).toHaveLength(2);
     const r = res.body.records.find((x: { section: string }) => x.section === '52');
     expect(r).toMatchObject({ current_status: 'completely_refused', reasoning: 'Intoxicated', origin_hub: 'West Hub', origin_steward: 'Dave', breaches: 0 });
-    expect(r.description).toBe('Male · Average build · green hat');
+    expect(r.description).toBe('Male · Average height · Average build · Adult · green hat');
     const hop = res.body.records.find((x: { section: string }) => x.section === 'BB');
     expect(hop.breaches).toBe(1);
   });

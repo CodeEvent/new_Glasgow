@@ -12,9 +12,10 @@ import { getTicketProfile, getTicketProfileBySeat } from './ticketLookup';
  * The WhatsApp-only steward flow.
  *
  *  Log:   a photo (Ticketmaster QR or the customer) and/or text such as
- *         "REFUSED 52 YY 14 West 1 M 2 green hat"  or  "30 52 YY 14 ...".
- *         Anything missing (decision, seat, hub, reason, then the description: male/female,
- *         build, clothing) is asked for, one question at a time, with numbered options.
+ *         "REFUSED 52 YY 14 West 1 3 M 3 2 adult green hat"  or  "30 52 YY 14 ...", or "LOG".
+ *         Anything missing is asked for, one question at a time, with numbered options:
+ *         refused/sent away, seat, hub, reasons (several allowed; "Other" asks what happened),
+ *         then male/female, height, build, minor/adult and clothing.
  *         The time is the message time. Each steward's hub is remembered.
  *  Check: "BB 212 100" -> refused / sent away / not on record, with the photo if there is one.
  *  Also:  UNDO (remove your last new record), CANCEL (drop a half-finished log), HELP.
@@ -59,34 +60,56 @@ export function parseHub(word: string): Hub | null {
 
 export const REASONS = ['Intoxicated', 'Abusive', 'Under the influence', 'Intoxicated minor', 'Found in possession', 'Other'] as const;
 export type Reason = (typeof REASONS)[number];
-export const BUILDS = ['Slim', 'Average', 'Heavy'] as const;
+export const HEIGHTS = ['Short', 'Average height', 'Tall'] as const;
+export const BUILDS = ['Slim', 'Average build', 'Heavy'] as const;
+export const AGES = ['Adult', 'Minor (under 18)'] as const;
 
-const SEP = /^[\s,.:;]*/;
+const SEP = /^[\s,.:;&]*/;
+const END = '(?=[\\s,.:;&]|$)';
 const REASON_WORDS: Array<[RegExp, Reason]> = [
-  [/^\s*(?:intox(?:icated)?\s+minor|minor)\b/i, 'Intoxicated minor'],
-  [/^\s*(?:intoxicated|intox)\b/i, 'Intoxicated'],
+  [/^\s*intox(?:icated)?\s+minor\b/i, 'Intoxicated minor'],
+  [/^\s*(?:intoxicated|intox|drunk)\b/i, 'Intoxicated'],
   [/^\s*(?:abusive|abuse)\b/i, 'Abusive'],
   [/^\s*(?:under\s+the\s+influence|under\s+influence|uti)\b/i, 'Under the influence'],
   [/^\s*(?:found\s+in\s+possession|possession|fip)\b/i, 'Found in possession'],
   [/^\s*other\b/i, 'Other'],
 ];
-const BUILD_WORDS: Array<[RegExp, (typeof BUILDS)[number]]> = [
-  [/^\s*(?:slim|thin|skinny)\b/i, 'Slim'],
-  [/^\s*(?:average|medium)\b/i, 'Average'],
-  [/^\s*(?:heavy|large|big|stocky)\b/i, 'Heavy'],
+const HEIGHT_WORDS: Array<[RegExp, string]> = [
+  [/^\s*short\b/i, HEIGHTS[0]],
+  [/^\s*(?:average|medium)\s+height\b/i, HEIGHTS[1]],
+  [/^\s*tall\b/i, HEIGHTS[2]],
+];
+const BUILD_WORDS: Array<[RegExp, string]> = [
+  [/^\s*(?:slim|thin|skinny)\b/i, BUILDS[0]],
+  [/^\s*(?:average|medium)(?:\s+build)?\b/i, BUILDS[1]],
+  [/^\s*(?:heavy|large|big|stocky)\b/i, BUILDS[2]],
 ];
 
 type Take<T> = [T, string] | null;
 const after = (s: string, used: number) => s.slice(used).replace(SEP, '');
 
-function takeReason(s: string): Take<Reason> {
-  const n = /^\s*([1-6])(?=[\s,.:;]|$)/.exec(s);
-  if (n) return [REASONS[Number(n[1]) - 1], after(s, n[0].length)];
-  for (const [re, r] of REASON_WORDS) {
-    const m = re.exec(s);
-    if (m) return [r, after(s, m[0].length)];
+/** "1 3 5", "1,3,5", "135", "drunk & abusive" -> every reason given, in order, without repeats. */
+function takeReasons(s: string): Take<Reason[]> {
+  const out: Reason[] = [];
+  const add = (r: Reason) => !out.includes(r) && out.push(r);
+  let rest = s;
+  for (;;) {
+    const packed = new RegExp(`^\\s*([1-6]{2,6})${END}`).exec(rest); // "135"
+    const n = packed ?? new RegExp(`^\\s*([1-6])${END}`).exec(rest);
+    if (n) {
+      for (const d of n[1]) add(REASONS[Number(d) - 1]);
+      rest = after(rest, n[0].length);
+      continue;
+    }
+    const w = REASON_WORDS.find(([re]) => re.test(rest));
+    if (w) {
+      add(w[1]);
+      rest = after(rest, w[0].exec(rest)![0].length);
+      continue;
+    }
+    break;
   }
-  return null;
+  return out.length ? [out, rest] : null;
 }
 
 function takeGender(s: string): Take<string> {
@@ -94,50 +117,73 @@ function takeGender(s: string): Take<string> {
   return m ? [/^(f|female|woman)$/i.test(m[1]) ? 'Female' : 'Male', after(s, m[0].length)] : null;
 }
 
-function takeBuild(s: string, allowDigit: boolean): Take<string> {
-  const n = allowDigit ? /^\s*([1-3])(?=[\s,.:;]|$)/.exec(s) : null;
-  if (n) return [BUILDS[Number(n[1]) - 1], after(s, n[0].length)];
-  for (const [re, b] of BUILD_WORDS) {
+/** A numbered option (only where a number can't be mistaken for something else) or one of its words. */
+function takeOption(s: string, options: readonly string[], words: Array<[RegExp, string]>, allowDigit: boolean): Take<string> {
+  const n = allowDigit ? new RegExp(`^\\s*([1-${options.length}])${END}`).exec(s) : null;
+  if (n) return [options[Number(n[1]) - 1], after(s, n[0].length)];
+  for (const [re, v] of words) {
     const m = re.exec(s);
-    if (m) return [b, after(s, m[0].length)];
+    if (m) return [v, after(s, m[0].length)];
   }
   return null;
 }
 
-type DetailField = 'reason' | 'gender' | 'build' | 'clothing';
+function takeAge(s: string, asked: boolean): Take<string> {
+  const words: Array<[RegExp, string]> = [
+    [/^\s*(?:adult|over\s*18|18\+)(?=[\s,.:;]|$)/i, AGES[0]],
+    [/^\s*(?:minor|child|kid|u18|under\s*18)\b/i, AGES[1]],
+  ];
+  // A lone "A" is only safe as the answer to the question ("a green hat" is clothing).
+  if (asked) words.push([/^\s*a\b/i, AGES[0]]);
+  return takeOption(s, AGES, words, asked);
+}
+
+const DETAIL_ORDER = ['reasons', 'gender', 'height', 'build', 'age', 'clothing'] as const;
+type DetailField = (typeof DETAIL_ORDER)[number];
+const DESCRIPTION_FIELDS = ['gender', 'height', 'build', 'age', 'clothing'] as const;
 
 export interface Details {
-  reason?: Reason;
+  reasons?: Reason[];
   gender?: string; // '' = skipped
+  height?: string; // '' = skipped
   build?: string; // '' = skipped
+  age?: string; // '' = skipped
   clothing?: string; // '' = skipped
 }
 
 /**
- * "1 M 2 green hat" -> reason, gender, build, clothing, in that order, each optional,
- * starting at `from`. A trailing "-" skips whatever description is still missing.
+ * "1 3 M 3 2 adult green hat" -> reasons, gender, height, build, age, clothing, in the
+ * order the bot asks them, each optional, starting at `from`. A bare number is only read
+ * as a height/build right after the field before it (or as the answer to that question),
+ * so "abusive 2 lads" stays clothing. A trailing "-" skips the rest of the description.
  */
-export function parseDetails(text: string, from: DetailField = 'reason'): Details {
-  const order: DetailField[] = ['reason', 'gender', 'build', 'clothing'];
-  const at = (f: DetailField) => order.indexOf(f) >= order.indexOf(from);
+export function parseDetails(text: string, from: DetailField = 'reasons'): Details {
+  const at = (f: DetailField) => DETAIL_ORDER.indexOf(f) >= DETAIL_ORDER.indexOf(from);
   const out: Details = {};
   let s = text;
-  if (at('reason')) {
-    const r = takeReason(s);
-    if (r) [out.reason, s] = r;
+  if (at('reasons')) {
+    const r = takeReasons(s);
+    if (r) [out.reasons, s] = r;
   }
   if (at('gender')) {
     const g = takeGender(s);
     if (g) [out.gender, s] = g;
   }
+  if (at('height')) {
+    const h = takeOption(s, HEIGHTS, HEIGHT_WORDS, from === 'height' || out.gender !== undefined);
+    if (h) [out.height, s] = h;
+  }
   if (at('build')) {
-    // A bare digit only means a build right after M/F, or as the answer to "Build?".
-    const b = takeBuild(s, from === 'build' || out.gender !== undefined);
+    const b = takeOption(s, BUILDS, BUILD_WORDS, from === 'build' || out.height !== undefined);
     if (b) [out.build, s] = b;
+  }
+  if (at('age')) {
+    const a = takeAge(s, from === 'age');
+    if (a) [out.age, s] = a;
   }
   const left = s.trim();
   if (/^[-–—]+$/.test(left)) {
-    for (const f of ['gender', 'build', 'clothing'] as const) if (at(f) && out[f] === undefined) out[f] = '';
+    for (const f of DESCRIPTION_FIELDS) if (at(f) && out[f] === undefined) out[f] = '';
   } else if (left) {
     out.clothing = left.replace(/^[-–—:]\s*/, '').slice(0, 300);
   }
@@ -188,10 +234,10 @@ export function parseSeatAnswer(text: string): Pick<ParsedLog, 'section' | 'row'
 
 // ---------------------------------------------------------------- conversation state
 
-type Field = 'decision' | 'seat' | 'hub' | 'reason' | 'other' | 'gender' | 'build' | 'clothing';
+type Field = 'decision' | 'seat' | 'hub' | 'reasons' | 'other' | 'gender' | 'height' | 'build' | 'age' | 'clothing';
 
 interface Pending extends ParsedLog {
-  otherReason?: string; // what happened, when the reason is "Other" ('' = skipped)
+  otherReason?: string; // what happened, when "Other" is one of the reasons ('' = skipped)
   ticketCode?: string;
   photo?: { data: Buffer; mime: string };
   asked?: Field;
@@ -208,17 +254,19 @@ const PENDING_TTL_MS = 10 * 60_000;
 const HUB_MEMORY_MS = 12 * 60 * 60_000;
 const UNDO_WINDOW_MS = 15 * 60_000;
 
+const numbered = (opts: readonly string[]) => opts.map((o, i) => `*${i + 1}* ${o}`).join('\n');
+const SKIP = '\n_(*-* to skip)_';
+
 const PROMPTS: Record<Field, string> = {
-  decision: 'Refused or sent away for 30 minutes? Reply *REFUSED* or *30*.',
+  decision: 'Refused entry, or sent away for 30 minutes? Reply with a number:\n*1* Refused entry\n*2* Sent away 30 min',
   seat: 'Which seat? Send section, row and seat, e.g. *52 YY 14*.',
   hub: 'Which hub are you at? *East*, *West*, *South* or *Hospitality*.',
-  reason:
-    'Reason? Reply with a number:\n' +
-    REASONS.map((r, i) => `*${i + 1}* ${r}`).join('\n') +
-    '\n_Tip: add the description too, e.g. *1 M 2 green hat*_',
-  other: 'What happened? Reply *-* to skip.',
-  gender: 'Male or female? Reply *M* or *F* (*-* to skip).',
-  build: `Build? Reply with a number:\n${BUILDS.map((b, i) => `*${i + 1}* ${b}`).join('\n')}\n(*-* to skip)`,
+  reasons: `Reason? Reply with a number:\n${numbered(REASONS)}\n_More than one? Send all the numbers, e.g. *1 3 5*_`,
+  other: 'You picked *Other*. What happened? Describe it in your own words.',
+  gender: `Male or female? Reply *M* or *F*.${SKIP}`,
+  height: `Height? Reply with a number:\n${numbered(HEIGHTS)}${SKIP}`,
+  build: `Build? Reply with a number:\n${numbered(BUILDS)}${SKIP}`,
+  age: `Minor or adult? Reply with a number:\n*1* Adult\n*2* Minor (under 18)${SKIP}`,
   clothing: 'What are they wearing? e.g. *green hat, black jacket*. Reply *-* to skip.',
 };
 
@@ -259,7 +307,7 @@ export class StewardBot {
     // ---- images: a ticket QR starts (or feeds) a log; another photo is the customer's picture.
     if (m.image) {
       const qr = await decodeQrFromImage(m.image.data);
-      const log = parseLogCommand(text);
+      const log = parseLogCommand(text) ?? (parseSeatAnswer(text) || (/^(log|new)$/i.test(text) ? {} : null));
       if (!qr && !log && !p) return []; // an ordinary photo in the group: not for us
       p = p ?? { startedAt: this.now() };
       if (qr) p.ticketCode = await ticketCodeFromQr(qr);
@@ -278,11 +326,18 @@ export class StewardBot {
       return this.advance(m, p);
     }
 
+    // ---- "LOG" starts a log from scratch: every question is asked
+    if (/^(log|new)$/i.test(text)) {
+      p = { startedAt: this.now() };
+      this.pending.set(k, p);
+      return this.advance(m, p);
+    }
+
     // ---- an answer to the bot's last question
     if (p) {
       const answered = this.applyAnswer(p, text);
       if (answered) return this.advance(m, p);
-      return [{ text: `${PROMPTS[p.asked ?? this.nextMissing(p, m.senderId) ?? 'reason']}\n_(or CANCEL)_` }];
+      return [{ text: `${PROMPTS[p.asked ?? this.nextMissing(p, m.senderId) ?? 'reasons']}\n_(or CANCEL)_` }];
     }
 
     // ---- a check: "BB 212 100" or "Check TM-…"
@@ -297,7 +352,7 @@ export class StewardBot {
     const asked = p.asked;
     if (!text) return false;
     if (asked === 'decision' || (!asked && !p.decision)) {
-      const d = parseDecision(text);
+      const d = /^1$/.test(text) ? 'refused' : /^2$/.test(text) ? 'cool_off' : parseDecision(text);
       if (d) return (p.decision = d), true;
     }
     if (asked === 'seat' || !p.seat) {
@@ -309,13 +364,16 @@ export class StewardBot {
       if (h && text.replace(HUB_RE, '').trim() === '') return (p.hub = h), true;
     }
     if (asked === 'other') {
-      p.otherReason = /^[-–—]+$/.test(text) ? '' : text.slice(0, 300);
+      if (/^[-–—]+$/.test(text)) return false; // "Other" needs a few words
+      p.otherReason = text.slice(0, 300);
       return true;
     }
-    if (asked === 'gender' || asked === 'build' || asked === 'clothing') {
-      if (/^[-–—]+$/.test(text)) return (p[asked] = ''), true; // skip just this question
+    const descField = DESCRIPTION_FIELDS.find((f) => f === asked);
+    if (descField && /^[-–—]+$/.test(text)) {
+      p[descField] = ''; // skip just this question
+      return true;
     }
-    if (asked === 'reason' || asked === 'gender' || asked === 'build' || asked === 'clothing') {
+    if (asked === 'reasons' || asked === 'gender' || asked === 'height' || asked === 'build' || asked === 'age' || asked === 'clothing') {
       const d = asked === 'clothing' ? { clothing: text.slice(0, 300) } : parseDetails(text, asked);
       if (d[asked] === undefined) return false;
       Object.assign(p, defined(d));
@@ -328,11 +386,9 @@ export class StewardBot {
     if (!p.decision) return 'decision';
     if (!p.seat) return 'seat';
     if (!p.hub && !this.rememberedHub(senderId)) return 'hub';
-    if (!p.reason) return 'reason';
-    if (p.reason === 'Other' && p.otherReason === undefined) return 'other';
-    if (p.gender === undefined) return 'gender';
-    if (p.build === undefined) return 'build';
-    if (p.clothing === undefined) return 'clothing';
+    if (!p.reasons?.length) return 'reasons';
+    if (p.reasons.includes('Other') && p.otherReason === undefined) return 'other';
+    for (const f of DESCRIPTION_FIELDS) if (p[f] === undefined) return f;
     return null;
   }
 
@@ -434,13 +490,15 @@ function defined<T extends object>(o: T): Partial<T> {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>;
 }
 
-/** "Male · Heavy build · green hat" from whatever the steward gave. */
+/** "Male · Tall · Heavy · Adult · green hat" from whatever the steward gave. */
 function describe(p: Pending): string {
-  return [p.gender, p.build && `${p.build} build`, p.clothing].filter(Boolean).join(' · ');
+  return [p.gender, p.height, p.build, p.age, p.clothing].filter(Boolean).join(' · ');
 }
 
+/** "Intoxicated, Abusive, Other: threw a bottle". */
 function reasonText(p: Pending): string | undefined {
-  return p.reason === 'Other' && p.otherReason ? `Other: ${p.otherReason}` : p.reason;
+  if (!p.reasons?.length) return undefined;
+  return p.reasons.map((r) => (r === 'Other' && p.otherReason ? `Other: ${p.otherReason}` : r)).join(', ');
 }
 
 function confirmation(o: ScanOutcome, hub: Hub, p: Pending, hubWasRemembered: boolean): string {
@@ -479,12 +537,10 @@ function confirmation(o: ScanOutcome, hub: Hub, p: Pending, hubWasRemembered: bo
 export const STEWARD_HELP =
   '🤖 *GATEKEEPER*\n\n' +
   '*Check a seat:* send section, row, seat, e.g. *52 YY 14*\n\n' +
-  '*Log someone:* send a photo of their ticket QR or of them, with:\n' +
-  '• *REFUSED 52 YY 14 West*\n' +
-  '• *30 52 YY 14 West* (sent away for 30 minutes)\n' +
-  'I’ll then ask the reason, male/female, build and clothing. Your hub is remembered.\n\n' +
-  '*All in one go:* *REFUSED 52 YY 14 West 1 M 2 green hat*\n' +
-  `Reasons: ${REASONS.map((r, i) => `${i + 1} ${r}`).join(' · ')}\n` +
-  `Build: ${BUILDS.map((b, i) => `${i + 1} ${b}`).join(' · ')}\n\n` +
+  '*Log someone:* send *REFUSED 52 YY 14 West* or *30 52 YY 14 West* (sent away 30 min), ' +
+  'or a photo of them or their ticket QR with the seat as the caption, or just *LOG*.\n' +
+  'I’ll then ask: reasons, male/female, height, build, minor or adult, and what they’re wearing. ' +
+  'Your hub is remembered.\n\n' +
+  `*Reasons* (send one or more, e.g. *1 3 5*): ${REASONS.map((r, i) => `${i + 1} ${r}`).join(' · ')}\n\n` +
   '*UNDO*: remove your last record · *CANCEL*: stop a log\n' +
   '_Records are deleted automatically after 24 hours._';

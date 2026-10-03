@@ -22,8 +22,9 @@ describe('log message parsing', () => {
     expect(parseLogCommand('REFUSED BB 212 100 West green hat, very drunk')).toEqual({
       decision: 'refused', section: 'BB', row: '212', seat: '100', hub: 'West Hub', clothing: 'green hat, very drunk',
     });
-    expect(parseLogCommand('REFUSED 52 YY 14 West 1 M 2 green hat')).toEqual({
-      decision: 'refused', section: '52', row: 'YY', seat: '14', hub: 'West Hub', reason: 'Intoxicated', gender: 'Male', build: 'Average', clothing: 'green hat',
+    expect(parseLogCommand('REFUSED 52 YY 14 West 1 3 M 3 2 adult green hat')).toEqual({
+      decision: 'refused', section: '52', row: 'YY', seat: '14', hub: 'West Hub', reasons: ['Intoxicated', 'Under the influence'],
+      gender: 'Male', height: 'Tall', build: 'Average build', age: 'Adult', clothing: 'green hat',
     });
     expect(parseLogCommand('30 bb 212 100 hospitality')).toEqual({ decision: 'cool_off', section: 'BB', row: '212', seat: '100', hub: 'Hospitality Hub' });
     expect(parseLogCommand('sent away Section BB Row 212 Seat 100 swaying')).toMatchObject({ decision: 'cool_off', seat: '100', clothing: 'swaying' });
@@ -32,19 +33,39 @@ describe('log message parsing', () => {
 
   it('reads "30 min" and section-row-seat order', () => {
     for (const d of ['30 min', '30min', '30 mins', '30 minutes']) {
-      expect(parseLogCommand(`${d} 52 YY 14 East drunk`)).toEqual({ decision: 'cool_off', section: '52', row: 'YY', seat: '14', hub: 'East Hub', clothing: 'drunk' });
+      expect(parseLogCommand(`${d} 52 YY 14 East drunk`)).toEqual({ decision: 'cool_off', section: '52', row: 'YY', seat: '14', hub: 'East Hub', reasons: ['Intoxicated'] });
     }
     expect(parseDecision('30 min')).toBe('cool_off');
   });
 
-  it('reads reason and description options', () => {
-    expect(parseDetails('4 f slim red dress')).toEqual({ reason: 'Intoxicated minor', gender: 'Female', build: 'Slim', clothing: 'red dress' });
-    expect(parseDetails('found in possession male heavy')).toEqual({ reason: 'Found in possession', gender: 'Male', build: 'Heavy' });
-    expect(parseDetails('under the influence -')).toEqual({ reason: 'Under the influence', gender: '', build: '', clothing: '' });
-    expect(parseDetails('abusive 2 lads')).toEqual({ reason: 'Abusive', clothing: '2 lads' }); // a digit is a build only after M/F
+  it('reads one or more reasons', () => {
+    expect(parseDetails('1 3 5')).toEqual({ reasons: ['Intoxicated', 'Under the influence', 'Found in possession'] });
+    expect(parseDetails('1,3,5')).toEqual(parseDetails('1 3 5'));
+    expect(parseDetails('135')).toEqual(parseDetails('1 3 5'));
+    expect(parseDetails('2 2 abusive')).toEqual({ reasons: ['Abusive'] }); // no repeats
+    expect(parseDetails('drunk & abusive')).toEqual({ reasons: ['Intoxicated', 'Abusive'] });
+    expect(parseDetails('6 1')).toEqual({ reasons: ['Other', 'Intoxicated'] });
     expect(parseDetails('7')).toEqual({ clothing: '7' });
+    expect(parseDetails('stumbling')).toEqual({ clothing: 'stumbling' });
+  });
+
+  it('reads the description options in the order they are asked', () => {
+    expect(parseDetails('4 f 1 1 minor red dress')).toEqual({
+      reasons: ['Intoxicated minor'], gender: 'Female', height: 'Short', build: 'Slim', age: 'Minor (under 18)', clothing: 'red dress',
+    });
+    expect(parseDetails('possession male tall heavy adult')).toEqual({
+      reasons: ['Found in possession'], gender: 'Male', height: 'Tall', build: 'Heavy', age: 'Adult',
+    });
+    expect(parseDetails('3 -')).toEqual({ reasons: ['Under the influence'], gender: '', height: '', build: '', age: '', clothing: '' });
+    expect(parseDetails('abusive green hat')).toEqual({ reasons: ['Abusive'], clothing: 'green hat' });
+    expect(parseDetails('2 f black dress 3', 'reasons')).toEqual({ reasons: ['Abusive'], gender: 'Female', clothing: 'black dress 3' });
+    expect(parseDetails('2', 'height')).toEqual({ height: 'Average height' });
     expect(parseDetails('3', 'build')).toEqual({ build: 'Heavy' });
-    expect(parseDetails('F 1 black jacket', 'gender')).toEqual({ gender: 'Female', build: 'Slim', clothing: 'black jacket' });
+    expect(parseDetails('average', 'build')).toEqual({ build: 'Average build' });
+    expect(parseDetails('2', 'age')).toEqual({ age: 'Minor (under 18)' });
+    expect(parseDetails('A', 'age')).toEqual({ age: 'Adult' });
+    expect(parseDetails('a green hat', 'gender')).toEqual({ clothing: 'a green hat' }); // "a" is not "adult" here
+    expect(parseDetails('F 1 3 black jacket', 'gender')).toEqual({ gender: 'Female', height: 'Short', build: 'Heavy', clothing: 'black jacket' });
   });
 
   it('ignores ordinary chat', () => {
@@ -98,38 +119,41 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
   });
 
   it('logs in one message and answers a check by seat', async () => {
-    const [r] = await bot.handle(msg('dave', 'REFUSED BB 212 100 West 1 M 2 green hat, very drunk'));
+    const [r] = await bot.handle(msg('dave', 'REFUSED BB 212 100 West 1 2 M 3 2 adult green hat, very drunk'));
     expect(r.text).toContain('✅ Logged 🔴 *REFUSED* · BB 212 100');
     expect(r.text).toContain('West Hub');
-    expect(r.text).toContain('📝 Intoxicated');
-    expect(r.text).toContain('👤 Male · Average build · green hat, very drunk');
+    expect(r.text).toContain('📝 Intoxicated, Abusive');
+    expect(r.text).toContain('👤 Male · Tall · Average build · Adult · green hat, very drunk');
 
     const [c] = await bot.handle(msg('sarah', 'BB 212 100'));
     expect(c.text).toContain('🔴 *REFUSED*');
     expect(c.text).toContain('green hat, very drunk');
-    expect(c.text).toContain('Intoxicated');
+    expect(c.text).toContain('Intoxicated, Abusive');
     expect(c.text).toContain('by Dave');
   });
 
   it('walks a steward through a QR photo step by step, remembering their hub next time', async () => {
     const [a] = await bot.handle(msg('dave', null, { image: { data: await qrPng(SAFETIX), mime: 'image/png' } }));
     expect(a.text).toContain('🎟️ Ticket QR read.');
-    expect(a.text).toContain('Refused or sent away');
-    const [b] = await bot.handle(msg('dave', '30'));
+    expect(a.text).toContain('Refused entry, or sent away for 30 minutes?');
+    const [b] = await bot.handle(msg('dave', '2'));
     expect(b.text).toContain('Which seat?');
     const [c] = await bot.handle(msg('dave', 'BB 212 100'));
     expect(c.text).toContain('Which hub');
     const [d] = await bot.handle(msg('dave', 'west'));
     expect(d.text).toContain('Reason?');
     expect(d.text).toContain('*4* Intoxicated minor');
+    expect(d.text).toContain('e.g. *1 3 5*');
     expect((await bot.handle(msg('dave', 'stumbling')))[0].text).toContain('Reason?'); // not an option: asked again
-    expect((await bot.handle(msg('dave', '3')))[0].text).toContain('Male or female?');
-    expect((await bot.handle(msg('dave', 'm')))[0].text).toContain('Build?');
-    expect((await bot.handle(msg('dave', '-')))[0].text).toContain('What are they wearing?');
+    expect((await bot.handle(msg('dave', '3 5')))[0].text).toContain('Male or female?');
+    expect((await bot.handle(msg('dave', 'm')))[0].text).toContain('Height?');
+    expect((await bot.handle(msg('dave', '3')))[0].text).toContain('Build?');
+    expect((await bot.handle(msg('dave', '-')))[0].text).toContain('Minor or adult?');
+    expect((await bot.handle(msg('dave', '2')))[0].text).toContain('What are they wearing?');
     const [e] = await bot.handle(msg('dave', 'black jacket'));
     expect(e.text).toContain('✅ Logged 🟠 *SENT AWAY 30 MIN* · BB 212 100');
-    expect(e.text).toContain('📝 Under the influence');
-    expect(e.text).toContain('👤 Male · black jacket');
+    expect(e.text).toContain('📝 Under the influence, Found in possession');
+    expect(e.text).toContain('👤 Male · Tall · Minor (under 18) · black jacket');
     expect(e.text).toContain('back after');
 
     const { rows } = await getPool().query('SELECT ticket_id, seat_key FROM tickets');
@@ -160,12 +184,22 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
     expect(r.text).toContain('Do not admit');
   });
 
-  it('asks what happened when the reason is Other', async () => {
-    expect((await bot.handle(msg('dave', 'REFUSED 52 YY 14 West 6')))[0].text).toContain('What happened?');
+  it('asks what happened when Other is one of the reasons', async () => {
+    expect((await bot.handle(msg('dave', 'REFUSED 52 YY 14 West 2 6')))[0].text).toContain('What happened?');
+    expect((await bot.handle(msg('dave', '-')))[0].text).toContain('What happened?'); // Other can't be skipped
     expect((await bot.handle(msg('dave', 'threw a bottle')))[0].text).toContain('Male or female?');
-    const [r] = await bot.handle(msg('dave', 'F 3 -'));
-    expect(r.text).toContain('📝 Other: threw a bottle');
-    expect(r.text).toContain('👤 Female · Heavy build');
+    const [r] = await bot.handle(msg('dave', 'F 2 3 -'));
+    expect(r.text).toContain('📝 Abusive, Other: threw a bottle');
+    expect(r.text).toContain('👤 Female · Average height · Heavy');
+  });
+
+  it('starts a log with LOG or a photo captioned with the seat, asking every question', async () => {
+    const [a] = await bot.handle(msg('dave', 'log'));
+    expect(a.text).toContain('Refused entry, or sent away');
+    expect((await bot.handle(msg('dave', '1')))[0].text).toContain('Which seat?');
+    await bot.handle(msg('priya', '52 YY 14', { image: { data: await plainPhoto(), mime: 'image/png' } }));
+    const [b] = await bot.handle(msg('priya', '30'));
+    expect(b.text).toContain('Which hub');
   });
 
   it('says NOT REFUSED for unknown seats and stays quiet for chat and random photos', async () => {
