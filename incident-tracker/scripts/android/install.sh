@@ -121,17 +121,18 @@ cat > "$BIN/gk-set" <<EOF
 # gk-set                      show the settings
 # gk-set SUMMARY_TIME 22:45   change one and restart the bot
 F="$DATA/settings.env"
-touch "\$F"
-if [ \$# -lt 2 ]; then echo "Settings (\$F):"; cat "\$F"; echo "(empty = defaults)"; exit 0; fi
+touch "\$F"; chmod 600 "\$F"
+# Show settings with the API key hidden.
+if [ \$# -lt 2 ]; then echo "Settings (\$F):"; sed -E "s/^(ANTHROPIC_API_KEY=).*/\\1'(set, hidden)'/" "\$F"; echo "(empty = defaults)"; exit 0; fi
 case "\$1" in
-  SUMMARY_TIME|WA_HUBHOP_ALERTS|WA_READMIT_REMINDERS|WA_SUPERVISOR_ONLY|WA_NIGHTLY_BACKUP|WA_HEALTH_ALERTS|COOL_OFF_MINUTES|RETENTION_HOURS|TZ_DISPLAY) ;;
-  *) echo "Unknown setting: \$1"; echo "Use one of: SUMMARY_TIME WA_HUBHOP_ALERTS WA_READMIT_REMINDERS WA_SUPERVISOR_ONLY WA_NIGHTLY_BACKUP WA_HEALTH_ALERTS COOL_OFF_MINUTES RETENTION_HOURS TZ_DISPLAY"; exit 1 ;;
+  SUMMARY_TIME|WA_HUBHOP_ALERTS|WA_READMIT_REMINDERS|WA_SUPERVISOR_ONLY|WA_NIGHTLY_BACKUP|WA_HEALTH_ALERTS|ANTHROPIC_API_KEY|AI_MODEL|AI_DAILY_LIMIT|COOL_OFF_MINUTES|RETENTION_HOURS|TZ_DISPLAY) ;;
+  *) echo "Unknown setting: \$1"; echo "Use one of: SUMMARY_TIME WA_HUBHOP_ALERTS WA_READMIT_REMINDERS WA_SUPERVISOR_ONLY WA_NIGHTLY_BACKUP WA_HEALTH_ALERTS ANTHROPIC_API_KEY AI_MODEL AI_DAILY_LIMIT COOL_OFF_MINUTES RETENTION_HOURS TZ_DISPLAY"; exit 1 ;;
 esac
 case "\$2" in *\'*) echo "Values can't contain quotes."; exit 1 ;; esac
 grep -v "^\$1=" "\$F" > "\$F.tmp" || true
 echo "\$1='\$2'" >> "\$F.tmp"
-mv "\$F.tmp" "\$F"
-echo "Saved \$1=\$2. Restarting…"
+mv "\$F.tmp" "\$F"; chmod 600 "\$F"
+if [ "\$1" = ANTHROPIC_API_KEY ]; then echo "Saved the AI key (hidden). Restarting…"; else echo "Saved \$1=\$2. Restarting…"; fi
 gk-stop >/dev/null
 gk-start
 EOF

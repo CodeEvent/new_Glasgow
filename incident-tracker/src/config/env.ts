@@ -63,6 +63,11 @@ const envObject = z.object({
   // Private messages to group admins: the CSV at SUMMARY_TIME, and "online" / battery alerts.
   WA_NIGHTLY_BACKUP: onByDefault,
   WA_HEALTH_ALERTS: onByDefault,
+  // Optional AI helper (plain-English questions and logs). Off unless a key is set.
+  ANTHROPIC_API_KEY: optionalText,
+  AI_MODEL: z.string().trim().default('claude-opus-5-5'),
+  // Most AI messages per day for everyone together (keeps the bill predictable).
+  AI_DAILY_LIMIT: z.coerce.number().int().min(0).default(200),
   // End-of-night summary posted to the groups at this time (HH:MM, TZ_DISPLAY), or "off".
   SUMMARY_TIME: z
     .string()

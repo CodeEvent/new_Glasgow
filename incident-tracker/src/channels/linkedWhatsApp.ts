@@ -2,6 +2,7 @@ import { getConfig } from '../config/env';
 import { HELP_TEXT, parseGroupMessage } from '../services/commandParser';
 import { formatQuickCheck } from '../services/quickCheck';
 import { getTicketProfile, getTicketProfileBySeat } from '../services/ticketLookup';
+import { AiAgent } from '../services/aiAgent';
 import { StewardBot } from '../services/stewardBot';
 import { registerAlertSink } from '../services/whatsapp';
 import { loadBaileys, type WAMessage, type WASocket } from './baileys';
@@ -59,6 +60,13 @@ export async function answerGroupMessage(text: string | null | undefined): Promi
 
 /** Text of a WhatsApp message, looking inside disappearing / view-once / edited wrappers. */
 /* eslint-disable @typescript-eslint/no-explicit-any */
+/** JIDs @mentioned in a text message. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function messageMentions(message: any): string[] {
+  const ctx = message?.extendedTextMessage?.contextInfo ?? message?.imageMessage?.contextInfo;
+  return Array.isArray(ctx?.mentionedJid) ? ctx.mentionedJid.filter((j: unknown): j is string => typeof j === 'string') : [];
+}
+
 export function messageText(message: any): string | null {
   let m = message;
   for (let i = 0; i < 4 && m; i++) {
@@ -135,6 +143,11 @@ export class LinkedWhatsApp {
     this.stopped = false;
     this.status = 'starting';
     this.groups = await getSetting<GroupRef[]>(GROUPS_SETTING, []);
+    const key = getConfig().ANTHROPIC_API_KEY;
+    if (key && !this.bot.ai) {
+      this.bot.ai = new AiAgent(key);
+      console.log(`[linked-wa] AI helper on (${getConfig().AI_MODEL}, up to ${getConfig().AI_DAILY_LIMIT} messages a day)`);
+    }
     if (getConfig().WA_LINKED_POST_ALERTS && !this.unregisterSink) {
       this.unregisterSink = registerAlertSink((body) => this.postToGroups(body));
     }
@@ -297,11 +310,15 @@ export class LinkedWhatsApp {
       const text = img ? (img.caption ?? null) : messageText(msg.message);
       if (!text && !image) return note('no text or photo, ignored');
 
+      const mentioned = messageMentions(msg.message);
+      const mentionsBot = mentioned.length > 0 && this.isMe(mentioned);
       const replies = await this.bot.handle({
         chatId: jid,
         senderId,
         senderName: msg.pushName ?? senderId.split('@')[0],
-        text,
+        // "@447… how many refused?" -> "how many refused?"
+        text: mentionsBot && text ? text.replace(/@\d{5,}\s*/g, '').trim() : text,
+        mentionsBot,
         image,
         at: new Date(timestampSeconds(msg.messageTimestamp) * 1000),
       });

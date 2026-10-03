@@ -1,6 +1,7 @@
 import { getConfig } from '../config/env';
 import { getPool, isConnectivityError } from '../db/pool';
 import { addNote, getNotes, listRecords, recordsToCsv, updateRecord, type RecordRow } from './adminRecords';
+import type { AiAgent } from './aiAgent';
 import { currentStats } from './nightReport';
 import { HUBS, type Hub } from '../domain';
 import { parseGroupMessage } from './commandParser';
@@ -34,6 +35,7 @@ export interface InboundMessage {
   text?: string | null; // message text or image caption
   image?: { data: Buffer; mime: string } | null;
   at?: Date; // when it was sent
+  mentionsBot?: boolean; // the bot was @mentioned (group chats)
 }
 
 export interface OutboundReply {
@@ -250,11 +252,13 @@ export function parseSeatAnswer(text: string): Pick<ParsedLog, 'section' | 'row'
 
 // ---------------------------------------------------------------- conversation state
 
-type Field = 'decision' | 'seat' | 'hub' | 'reasons' | 'other' | 'gender' | 'height' | 'build' | 'age' | 'clothing';
+type Field = 'decision' | 'seat' | 'hub' | 'reasons' | 'other' | 'gender' | 'height' | 'build' | 'age' | 'clothing' | 'confirm';
 
 interface Pending extends ParsedLog {
   editTicketId?: string; // EDIT: re-asking the details of a saved record
   editLabel?: string;
+  aiDraft?: boolean; // filled in by the AI helper: the steward must confirm before saving
+  confirmed?: boolean;
   seatLookedUp?: string; // seat already checked against existing records (warned once)
   otherReason?: string; // what happened, when "Other" is one of the reasons ('' = skipped)
   ticketCode?: string;
@@ -303,6 +307,7 @@ const PROMPTS: Record<Field, string> = {
   build: `Build? Reply with a number:\n${numbered(BUILDS)}${SKIP}`,
   age: `Minor or adult? Reply with a number:\n*1* Adult\n*2* Minor (under 18)${SKIP}`,
   clothing: 'What are they wearing? e.g. *green hat, black jacket*. Reply *-* to skip.',
+  confirm: 'Reply *YES* to save it, or *CANCEL*.', // the summary is added in prompt()
 };
 
 export class StewardBot {
@@ -311,6 +316,9 @@ export class StewardBot {
   private lastLogs = new Map<string, LastLog>();
   /** A sender's last uncaptioned photo, so "PHOTO 52 YY 14" sent right after it still works. */
   private loosePhotos = new Map<string, { image: { data: Buffer; mime: string }; at: number }>();
+
+  /** Optional AI helper (plain-English questions and logs); set when ANTHROPIC_API_KEY is configured. */
+  ai?: Pick<AiAgent, 'handle'>;
 
   /** Posts to the selected groups except `exceptChatId` (set by the WhatsApp channel). */
   announce?: (text: string, exceptChatId?: string) => void;
@@ -336,6 +344,7 @@ export class StewardBot {
 
   /** The question, with the steward's last hub as a hint and how to go back or stop. */
   private prompt(field: Field, p: Pending, senderId: string): string {
+    if (field === 'confirm') return `${draftSummary(p)}\n${PROMPTS.confirm}\n_After saving you can still change it with *EDIT ${p.section} ${p.row} ${p.seat}*._`;
     let text = PROMPTS[field];
     const last = field === 'hub' ? this.rememberedHub(senderId) : undefined;
     if (last) text += `\n_Last time: *${last.replace(' Hub', '')}* (reply *${HUBS.indexOf(last) + 1}*)_`;
@@ -374,7 +383,7 @@ export class StewardBot {
     }
     if (/^(back|prev|previous)$/i.test(text)) return p ? [{ text: this.back(p, m.senderId) }] : [];
     if (/^undo$/i.test(text)) return [{ text: await this.undo(m.senderId) }];
-    if (/^(help|\?|menu)$/i.test(text)) return [{ text: STEWARD_HELP }];
+    if (/^(help|\?|menu)$/i.test(text)) return [{ text: STEWARD_HELP + (this.ai ? AI_HELP : '') }];
     if (/^list$/i.test(text)) return [{ text: await this.list() }];
     if (/^stats$/i.test(text)) return [{ text: await this.stats() }];
     if (/^report$/i.test(text)) return [await this.report(m)];
@@ -419,6 +428,8 @@ export class StewardBot {
 
     // ---- text that starts a log: "REFUSED BB 212 100 West very drunk"
     const log = parseLogCommand(text);
+    // "refused drunk lad in a green hat at West, seat 313 YY 56": plain English, let the AI read it.
+    if (log && this.ai && !log.section && (log.clothing ?? '').split(/\s+/).length >= 3) return this.askAi(m, text, k);
     if (log) {
       p = { ...(p ?? {}), ...defined(log), startedAt: p?.startedAt ?? this.now() };
       this.pending.set(k, p);
@@ -451,6 +462,13 @@ export class StewardBot {
       return [{ text: this.prompt(p.asked ?? this.nextMissing(p) ?? 'reasons', p, m.senderId) }];
     }
 
+    // ---- the AI helper, when addressed: "GK how many refused at West?" or an @mention
+    const addressed = /^(?:gk|gatekeeper|ai)\b[\s,:;-]*/i.exec(text);
+    if (this.ai && (addressed || m.mentionsBot)) {
+      const question = addressed ? text.slice(addressed[0].length) : text;
+      if (question.trim()) return this.askAi(m, question, k);
+    }
+
     // ---- part of a seat: "313 L" (section and row), "313" or "SECTION 313"
     const partial = parsePartialSeat(text);
     if (partial) {
@@ -460,7 +478,11 @@ export class StewardBot {
 
     // ---- a check: "BB 212 100" or "Check TM-…"
     const cmd = parseGroupMessage(text);
-    if (!cmd) return [];
+    if (!cmd) {
+      // In a private chat, anything else goes to the AI helper (if it's on).
+      if (this.ai && !m.chatId.endsWith('@g.us') && text.length > 2) return this.askAi(m, text, k);
+      return [];
+    }
     if (cmd.kind === 'help') return [{ text: STEWARD_HELP }];
     if (cmd.kind === 'invalid_check') return [];
     return [await this.check(cmd)];
@@ -483,6 +505,11 @@ export class StewardBot {
       if (n) return (p.hub = HUBS[Number(n[1]) - 1]), true;
       const h = parseHub(text);
       if (h && text.replace(HUB_RE, '').trim() === '') return (p.hub = h), true;
+    }
+    if (asked === 'confirm') {
+      if (!/^(yes|y|yep|ok|okay|save|confirm|correct)[.!]*$/i.test(text)) return false;
+      p.confirmed = true;
+      return true;
     }
     if (asked === 'other') {
       if (/^[-–—]+$/.test(text)) return false; // "Other" needs a few words
@@ -516,6 +543,7 @@ export class StewardBot {
     if (!p.reasons?.length) return 'reasons';
     if (p.reasons.includes('Other') && p.otherReason === undefined) return 'other';
     for (const f of DESCRIPTION_FIELDS) if (p[f] === undefined) return f;
+    if (p.aiDraft && !p.confirmed) return 'confirm';
     return null;
   }
 
@@ -624,6 +652,35 @@ export class StewardBot {
     this.lastLogs.delete(senderId);
     const { rowCount } = await getPool().query('DELETE FROM tickets WHERE ticket_id = $1', [last.ticketId]);
     return rowCount ? '↩️ Removed your last record.' : 'That record was already gone.';
+  }
+
+  // ---------------------------------------------------------------- AI helper
+
+  private async askAi(m: InboundMessage, text: string, k: string): Promise<OutboundReply[]> {
+    const res = await this.ai!.handle(text, m.senderId);
+    if (res.kind !== 'draft') return [{ text: res.kind === 'answer' ? `🤖 ${res.text}` : res.text }];
+    const d = res.draft;
+    const p: Pending = {
+      startedAt: this.now(),
+      aiDraft: true,
+      decision: d.decision,
+      ejected: d.ejected || undefined,
+      section: d.section,
+      row: d.row,
+      seat: d.seat,
+      hub: d.hub,
+      reasons: d.reasons,
+      otherReason: d.otherReason,
+      party: d.party,
+      // Description details the steward didn't mention are left blank, not asked.
+      gender: d.gender ?? '',
+      height: d.height ?? '',
+      build: d.build ?? '',
+      age: d.age ?? '',
+      clothing: d.clothing ?? '',
+    };
+    this.pending.set(k, p);
+    return this.advance(m, p, '🤖 Got it.');
   }
 
   // ---------------------------------------------------------------- FIND, NOTE, PARTY, EDIT
@@ -885,6 +942,18 @@ export function parsePartialSeat(text: string): { section: string; row?: string;
   return null;
 }
 
+/** What an AI draft will save, for the steward to confirm. */
+function draftSummary(p: Pending): string {
+  const head = p.decision === 'cool_off' ? '🟠 *SENT AWAY 30 MIN*' : p.ejected ? '⛔ *EJECTED*' : '🔴 *REFUSED*';
+  const lines = [`*Check this before I save it:*`, `${head} · ${p.section} ${p.row} ${p.seat} · ${p.hub ?? '?'}`];
+  const reason = reasonText(p);
+  if (reason) lines.push(`📝 ${sanitize(reason, 200)}`);
+  const desc = describe(p);
+  if (desc) lines.push(`👤 ${sanitize(desc, 200)}`);
+  if (p.party && p.party > 1) lines.push(`👥 Party of ${p.party}`);
+  return lines.join('\n');
+}
+
 function statusIcon(r: RecordRow, now: Date): string {
   if (r.current_status === 'admitted') return '🟢';
   if (r.current_status === 'completely_refused') return /^Ejected/.test(r.reasoning) ? '⛔' : '🔴';
@@ -975,3 +1044,9 @@ export const STEWARD_HELP =
   'a photo captioned *PHOTO 52 YY 14* · *EDIT 52 YY 14* (your own log; admins: any)\n' +
   '_Group admins only:_ *CLEAR 52 YY 14* (may enter now) · *REPORT* in a private chat (the spreadsheet)\n\n' +
   '_Records are deleted automatically after 24 hours._';
+
+/** Added to HELP when the AI helper is on. */
+export const AI_HELP =
+  '\n\n🤖 *Ask in plain English:* start with *GK* (or @mention me), e.g. *GK anyone in a red coat sent away?* ' +
+  'or *GK refused a drunk lad in a green hat, 313 YY 56, West*. In a private chat, just type. ' +
+  'I show you what I understood before saving anything.';
