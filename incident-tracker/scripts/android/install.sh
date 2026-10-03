@@ -103,9 +103,14 @@ tail -n "\${1:-60}" "$DATA/gatekeeper.log"
 EOF
 cat > "$BIN/gk-update" <<EOF
 #!/data/data/com.termux/files/usr/bin/bash
+# Download first: if the network is down, the running bot is left alone.
+if ! git -C "$SRC" fetch --depth 1 origin "$BRANCH"; then
+  echo "❌ Couldn't download the update (no internet, or GitHub unreachable). Gatekeeper keeps running the current version."
+  echo "   Try again later, or switch between Wi-Fi and mobile data."
+  exit 1
+fi
 set -e
 gk-stop
-git -C "$SRC" fetch --depth 1 origin "$BRANCH"
 git -C "$SRC" checkout -q -B "$BRANCH" FETCH_HEAD
 bash "$APP/scripts/android/install.sh"
 EOF
