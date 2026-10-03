@@ -122,6 +122,8 @@ export class LinkedWhatsApp {
   /** Everyone in the selected groups, so they can also talk to the bot in a private chat. */
   private members = new Set<string>();
   private admins = new Set<string>(); // admins of the selected groups = supervisors (CLEAR, REPORT)
+  private adminChats: string[] = []; // one private chat per admin (phone number if known), for backups and health alerts
+  private saidOnline = false;
   private membersRefreshedAt = 0;
   private stopped = false;
   private attempts = 0;
@@ -208,6 +210,11 @@ export class LinkedWhatsApp {
         this.lastError = null;
         this.me = sock.user ?? null;
         console.log(`[linked-wa] connected as ${this.me?.id ?? 'unknown'}; answering in ${this.groups.length} group(s)`);
+        if (!this.saidOnline && getConfig().WA_HEALTH_ALERTS && this.groups.length) {
+          this.saidOnline = true; // once per start, not on every reconnect
+          const at = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: getConfig().TZ_DISPLAY }).format(new Date());
+          void this.sendToAdmins(`✅ Gatekeeper is online (started ${at}).`).catch(() => undefined);
+        }
       }
       if (u.connection === 'close') {
         const code = u.lastDisconnect?.error?.output?.statusCode;
@@ -319,20 +326,46 @@ export class LinkedWhatsApp {
       const all = await this.sock.groupFetchAllParticipating();
       const ids = new Set<string>();
       const admins = new Set<string>();
+      const chats: string[] = [];
       for (const g of Object.values(all)) {
         if (!this.groups.some((s) => s.jid === g.id)) continue;
         for (const p of g.participants as Array<Record<string, string | undefined>>) {
           const pIds = ['id', 'jid', 'lid', 'phoneNumber'].map((k) => p[k]).filter((v): v is string => !!v);
           for (const id of pIds) ids.add(id);
-          if (p.admin === 'admin' || p.admin === 'superadmin') for (const id of pIds) admins.add(id);
+          if (p.admin === 'admin' || p.admin === 'superadmin') {
+            for (const id of pIds) admins.add(id);
+            const chat = pIds.find((id) => id.endsWith('@s.whatsapp.net')) ?? pIds[0];
+            if (chat && !this.isMe(pIds) && !chats.includes(chat)) chats.push(chat);
+          }
         }
       }
       this.members = ids;
       this.admins = admins;
+      this.adminChats = chats;
       this.membersRefreshedAt = Date.now();
     } catch (err) {
       console.error('[linked-wa] could not refresh group members:', (err as Error).message);
     }
+  }
+
+  /** Whether any of these ids is the bot's own number ("447…:72@s.whatsapp.net" -> "447…"). */
+  private isMe(ids: string[]): boolean {
+    const me = [this.me?.id, (this.me as { lid?: string } | null)?.lid].filter(Boolean).map((j) => j!.split(':')[0].split('@')[0]);
+    return ids.some((id) => me.includes(id.split(':')[0].split('@')[0]));
+  }
+
+  /** Private message (and optional file) to every admin of the selected groups. */
+  async sendToAdmins(text: string, document?: { data: Buffer; mime: string; fileName: string }): Promise<number> {
+    if (this.status !== 'connected' || !this.sock || this.groups.length === 0) return 0;
+    this.membersRefreshedAt = 0; // always use the current admin list
+    await this.refreshMembers('', this.admins);
+    for (const jid of this.adminChats) {
+      this.enqueue(jid, async () => {
+        await this.sock?.sendMessage(jid, { text });
+        if (document) await this.sock?.sendMessage(jid, { document: document.data, mimetype: document.mime, fileName: document.fileName });
+      });
+    }
+    return this.adminChats.length;
   }
 
   private async isMember(senderId: string): Promise<boolean> {

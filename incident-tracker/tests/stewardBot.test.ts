@@ -135,7 +135,7 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
   it('walks a steward through a QR photo step by step, asking the hub every time', async () => {
     const [a] = await bot.handle(msg('dave', null, { image: { data: await qrPng(SAFETIX), mime: 'image/png' } }));
     expect(a.text).toContain('🎟️ Ticket QR read.');
-    expect(a.text).toContain('Refused entry, or sent away for 30 minutes?');
+    expect(a.text).toContain('Refused entry, sent away for 30 minutes, or ejected?');
     const [b] = await bot.handle(msg('dave', '2'));
     expect(b.text).toContain('Which seat?');
     const [c] = await bot.handle(msg('dave', 'BB 212 100'));
@@ -312,9 +312,76 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
     expect(posts[0].text).toContain('Logged by Priya');
   });
 
+  it('FIND searches descriptions, reasons and notes', async () => {
+    await bot.handle(msg('dave', 'REFUSED 313 YY 56 West 1 M 3 2 adult green hat, black jacket'));
+    await bot.handle(msg('dave', '30 52 YY 14 West 2 F 1 1 adult red coat'));
+    expect((await bot.handle(msg('sarah', 'FIND blue scarf')))[0].text).toContain('Nothing on record matches');
+    const [r] = await bot.handle(msg('sarah', 'find green hat'));
+    expect(r.text).toContain('🔎 1 match for “green hat”');
+    expect(r.text).toContain('🔴 *313 YY 56* · Intoxicated');
+    expect((await bot.handle(msg('sarah', 'FIND abusive')))[0].text).toContain('🟠 *52 YY 14*');
+    await bot.handle(msg('sarah', 'NOTE 52 YY 14 tattoo on left hand'));
+    expect((await bot.handle(msg('sarah', 'find tattoo')))[0].text).toContain('*52 YY 14*');
+  });
+
+  it('NOTE adds a note shown on checks', async () => {
+    expect((await bot.handle(msg('sarah', 'NOTE 1 2 3 hi')))[0].text).toContain('Nothing on record');
+    await bot.handle(msg('dave', 'REFUSED 313 YY 56 West 1 -'));
+    expect((await bot.handle(msg('sarah', 'NOTE 313 YY 56')))[0].text).toContain('Add the note after the seat');
+    expect((await bot.handle(msg('sarah', 'note 313 yy 56 came back calm, still refused')))[0].text).toContain('🗒️ Note added to *313 YY 56*');
+    const [c] = await bot.handle(msg('dave', '313 YY 56'));
+    expect(c.text).toMatch(/🗒️ \d\d:\d\d Sarah: came back calm, still refused/);
+  });
+
+  it('records party size from the log line or PARTY', async () => {
+    const [r] = await bot.handle(msg('dave', 'REFUSED 313 YY 56 West x3 1 -'));
+    expect(r.text).toContain('👥 Party of 3');
+    expect((await bot.handle(msg('sarah', 'LIST')))[0].text).toContain('👥3');
+    expect((await bot.handle(msg('sarah', 'PARTY 313 YY 56 4')))[0].text).toContain('party of 4');
+    const { rows } = await getPool().query('SELECT party_size FROM tickets');
+    expect(rows[0].party_size).toBe(4);
+    expect(parseLogCommand('REFUSED 52 X 3 West')).toMatchObject({ section: '52', row: 'X', seat: '3' }); // row X, not a party
+    expect(parseLogCommand('30 52 YY 14 party of 2 1 -')).toMatchObject({ party: 2, reasons: ['Intoxicated'] });
+  });
+
+  it('logs ejections', async () => {
+    const [a] = await bot.handle(msg('dave', 'LOG'));
+    expect(a.text).toContain('*3* Ejected');
+    await bot.handle(msg('dave', '3'));
+    await bot.handle(msg('dave', '313 YY 56'));
+    await bot.handle(msg('dave', '1'));
+    const [r] = await bot.handle(msg('dave', '1 2 -'));
+    expect(r.text).toContain('✅ Logged ⛔ *EJECTED* · 313 YY 56');
+    expect(r.text).toContain('📝 Ejected: Intoxicated, Abusive');
+    expect((await bot.handle(msg('sarah', 'EJECTED 52 YY 14 South 2 -')))[0].text).toContain('⛔ *EJECTED*');
+    expect((await bot.handle(msg('sarah', 'STATS')))[0].text).toContain('🔴 0 refused · ⛔ 2 ejected');
+    expect((await bot.handle(msg('sarah', 'STATS')))[0].text).toContain('*Reasons:* Abusive 2 · Intoxicated 1');
+  });
+
+  it('EDIT re-asks reasons and description: own last log, or group admins', async () => {
+    await bot.handle(msg('dave', 'REFUSED 313 YY 56 West 1 M 3 2 adult green hat'));
+    bot.canSupervise = async (id) => id === 'sarah';
+    expect((await bot.handle(msg('priya', 'EDIT 313 YY 56')))[0].text).toContain('⛔ Only group admins');
+    const [e] = await bot.handle(msg('dave', 'EDIT 313 yy 56'));
+    expect(e.text).toContain('✏️ Editing *313 YY 56*');
+    expect(e.text).toContain('Reason?');
+    await bot.handle(msg('dave', '2 5'));
+    const [done] = await bot.handle(msg('dave', 'F 1 1 adult red coat'));
+    expect(done.text).toContain('✏️ *Updated* · 313 YY 56');
+    expect(done.text).toContain('📝 Abusive, Found in possession');
+    expect(done.text).toContain('👤 Female · Short · Slim · Adult · red coat');
+    const [c] = await bot.handle(msg('priya', '313 YY 56'));
+    expect(c.text).toContain('Abusive, Found in possession');
+    expect(c.text).toContain('🔴 *REFUSED*'); // status unchanged
+    // CANCEL during an edit keeps the record as it was.
+    await bot.handle(msg('sarah', 'EDIT 313 YY 56'));
+    await bot.handle(msg('sarah', 'cancel'));
+    expect((await bot.handle(msg('priya', '313 YY 56')))[0].text).toContain('Abusive, Found in possession');
+  });
+
   it('starts a log with LOG or a photo captioned with the seat, asking every question', async () => {
     const [a] = await bot.handle(msg('dave', 'log'));
-    expect(a.text).toContain('Refused entry, or sent away');
+    expect(a.text).toContain('Refused entry, sent away');
     expect((await bot.handle(msg('dave', '1')))[0].text).toContain('Which seat?');
     await bot.handle(msg('priya', '52 YY 14', { image: { data: await plainPhoto(), mime: 'image/png' } }));
     const [b] = await bot.handle(msg('priya', '30'));

@@ -121,6 +121,16 @@ describe.skipIf(!HAS_DB)('linked WhatsApp bot routing (fake socket)', () => {
     expect(sent.at(-1)!.content.text).toContain('🟢 *BB 212 100* cleared');
   });
 
+  it('sends private messages and files to group admins only', async () => {
+    (wa as unknown as { status: string }).status = 'connected';
+    const n = await wa.sendToAdmins('🗂️ backup', { data: Buffer.from('a,b'), mime: 'text/csv', fileName: 'x.csv' });
+    await settle();
+    expect(n).toBe(1);
+    expect(sent.map((m) => m.jid)).toEqual(['447700900111@s.whatsapp.net', '447700900111@s.whatsapp.net']);
+    expect(sent[0].content.text).toBe('🗂️ backup');
+    expect(sent[1].content.fileName).toBe('x.csv');
+  });
+
   it('sends the stored photo back with a check', async () => {
     const { Jimp } = await import('jimp');
     media.buffer = await new Jimp({ width: 60, height: 60, color: 0xaa3333ff }).getBuffer('image/png');

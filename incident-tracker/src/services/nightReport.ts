@@ -1,6 +1,6 @@
 import { getConfig } from '../config/env';
 import { getPool, isConnectivityError } from '../db/pool';
-import { listRecords, type RecordRow } from './adminRecords';
+import { listRecords, recordsToCsv, type RecordRow } from './adminRecords';
 import { formatClock, sanitize } from './format';
 
 /**
@@ -16,6 +16,7 @@ const seatOf = (r: { section: string | null; row_label: string | null; seat_numb
 function reasonsOf(reasoning: string): string[] {
   if (!reasoning || reasoning === 'Not provided') return [];
   return reasoning
+    .replace(/^Ejected:?\s*/, '')
     .split(/\s*,\s*(?=[A-Z])/)
     .map((r) => (r.startsWith('Other') ? 'Other' : r.replace(/\s*·\s*Cleared by.*$/, '').trim()))
     .filter(Boolean);
@@ -32,14 +33,15 @@ function tally(values: string[]): string {
 
 export function statsText(rows: RecordRow[], now: Date, title = '📊 *TONIGHT SO FAR*'): string {
   if (!rows.length) return `${title}\nNothing logged.`;
-  const refused = rows.filter((r) => r.current_status === 'completely_refused').length;
+  const ejected = rows.filter((r) => r.current_status === 'completely_refused' && /^Ejected/.test(r.reasoning)).length;
+  const refused = rows.filter((r) => r.current_status === 'completely_refused').length - ejected;
   const awayNow = rows.filter((r) => r.current_status === 'cooling_off' && r.cool_down_until && new Date(r.cool_down_until) > now).length;
   const ended = rows.filter((r) => r.current_status === 'cooling_off' && (!r.cool_down_until || new Date(r.cool_down_until) <= now)).length;
   const admitted = rows.filter((r) => r.current_status === 'admitted').length;
   const hops = rows.filter((r) => r.breaches > 0);
   const lines = [
     title,
-    `${rows.length} logged · 🔴 ${refused} refused · 🟠 ${awayNow} sent away now` +
+    `${rows.length} logged · 🔴 ${refused} refused${ejected ? ` · ⛔ ${ejected} ejected` : ''} · 🟠 ${awayNow} sent away now` +
       (ended ? ` · 🟡 ${ended} cool-off ended` : '') +
       (admitted ? ` · 🟢 ${admitted} cleared` : ''),
   ];
@@ -48,6 +50,8 @@ export function statsText(rows: RecordRow[], now: Date, title = '📊 *TONIGHT S
   if (reasons) lines.push(`*Reasons:* ${reasons}`);
   const hubs = tally(rows.map((r) => r.origin_hub?.replace(' Hub', '') ?? '').filter(Boolean));
   if (hubs) lines.push(`*Hubs:* ${hubs}`);
+  const people = rows.reduce((n, r) => n + (r.party_size || 1), 0);
+  if (people > rows.length) lines.push(`*People:* ${people} (groups counted)`);
   const minors = rows.filter((r) => /Minor \(under 18\)|Intoxicated minor/.test(`${r.description} ${r.reasoning}`)).length;
   if (minors) lines.push(`*Minors:* ${minors}`);
   return lines.join('\n');
@@ -107,7 +111,12 @@ function localClock(d: Date): { hm: string; day: string } {
  * Every minute: post readmit reminders for cool-offs that just ended, and the summary at
  * SUMMARY_TIME. `post` sends to the selected groups (it does nothing while unlinked).
  */
-export function startNightJobs(post: (text: string) => void, everyMs = 60_000, clock: () => Date = () => new Date()): () => void {
+export function startNightJobs(
+  post: (text: string) => void,
+  everyMs = 60_000,
+  clock: () => Date = () => new Date(),
+  sendToAdmins?: (text: string, document: { data: Buffer; mime: string; fileName: string }) => void,
+): () => void {
   let checkedUntil = clock(); // reminders only for cool-offs that end after the bot started
   let summarisedDay = '';
   const tick = async () => {
@@ -124,6 +133,12 @@ export function startNightJobs(post: (text: string) => void, everyMs = 60_000, c
         if (hm === cfg.SUMMARY_TIME && summarisedDay !== day) {
           summarisedDay = day;
           const rows = await listRecords({}, 10_000);
+          if (rows.length && cfg.WA_NIGHTLY_BACKUP && sendToAdmins) {
+            sendToAdmins(
+              `🗂️ Tonight's records (${rows.length}), before they're deleted automatically after ${cfg.RETENTION_HOURS} hours. Save this file if you need it.`,
+              { data: Buffer.from('\ufeff' + recordsToCsv(rows), 'utf8'), mime: 'text/csv', fileName: `gatekeeper-${day}.csv` },
+            );
+          }
           if (rows.length) {
             post(`${statsText(rows, now, '🌙 *END OF NIGHT SUMMARY*')}\n\n_Send *LIST* for who is still refused, or *REPORT* to me privately for the spreadsheet. Records are deleted automatically after ${cfg.RETENTION_HOURS} hours._`);
           }

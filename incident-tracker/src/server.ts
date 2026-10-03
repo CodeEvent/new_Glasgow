@@ -10,6 +10,7 @@ import { startOfflineSyncWatchdog } from './services/offlineSync';
 import { linkedWhatsApp } from './channels/linkedWhatsApp';
 import { startRetentionJob } from './services/retention';
 import { startNightJobs } from './services/nightReport';
+import { startHealthJob } from './services/health';
 
 const app = createApp();
 // HOST=127.0.0.1 keeps the server private to this computer (used by `npm run local`).
@@ -22,7 +23,17 @@ const stopWatchdog = startOfflineSyncWatchdog();
 const stopRetention = startRetentionJob();
 
 // Readmit reminders and the end-of-night summary, posted into the selected WhatsApp groups.
-const stopNightJobs = config.WA_LINKED_ENABLED ? startNightJobs((text) => void linkedWhatsApp.postToGroups(text)) : () => undefined;
+const stopNightJobs = config.WA_LINKED_ENABLED
+  ? startNightJobs(
+      (text) => void linkedWhatsApp.postToGroups(text),
+      undefined,
+      undefined,
+      (text, doc) => void linkedWhatsApp.sendToAdmins(text, doc),
+    )
+  : () => undefined;
+// Battery / unplugged alerts to the group admins (Android phone with Termux:API only).
+const stopHealth =
+  config.WA_LINKED_ENABLED && config.WA_HEALTH_ALERTS ? startHealthJob((text) => void linkedWhatsApp.sendToAdmins(text)) : () => undefined;
 
 if (config.WA_LINKED_ENABLED) {
   linkedWhatsApp
@@ -39,6 +50,7 @@ async function shutdown(signal: string) {
   stopWatchdog();
   stopRetention();
   stopNightJobs();
+  stopHealth();
   await linkedWhatsApp.stop().catch(() => undefined);
   server.close(async () => {
     await closePool().catch(() => undefined);

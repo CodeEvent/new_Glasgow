@@ -9,7 +9,12 @@ Stewards log and check refused patrons entirely inside your **work WhatsApp grou
 | `52 YY 14` | 🔴 REFUSED … with the reasons, description, who logged it, where and when, plus the photo |
 | `52 YY 14` (nothing logged) | ✅ NOT REFUSED |
 | `LIST` | everyone refused or sent away right now: seat, reasons, hub and time, description, 🚨 if they tried another hub |
-| `STATS` | tonight's numbers: refused, sent away, cleared, hub-hops, by reason, by hub, minors |
+| `STATS` | tonight's numbers: refused, ejected, sent away, cleared, hub-hops, by reason, by hub, minors, people in groups |
+| `FIND green hat` | searches tonight's descriptions, reasons and notes; for when you see someone but don't know their seat |
+| `NOTE 52 YY 14 came back calm` | 🗒️ adds a note to a saved record; checks show the latest notes |
+| `PARTY 52 YY 14 3` | 👥 sets the group size. Or add `x3` / `party of 3` to the log line: `REFUSED 52 YY 14 West x3` |
+| `EJECTED 52 YY 14 West` | ⛔ logs someone removed from **inside** the venue (or answer *3* to the first question). Treated as refused at every gate. |
+| `EDIT 52 YY 14` | ✏️ re-asks the reasons and description of a saved record. Your own last log, or any record for group admins. `CANCEL` keeps it as it was. |
 | `CLEAR 52 YY 14` (**group admins only**) | 🟢 marks that person as allowed in now, noting who and when |
 | a photo captioned `PHOTO 52 YY 14` | 📷 adds the photo to an already saved record |
 | `REPORT` (**group admins only**, in a **private chat** with the bot) | the spreadsheet (CSV) of everything on record |
@@ -20,6 +25,8 @@ Stewards log and check refused patrons entirely inside your **work WhatsApp grou
 - 🚨 **Hub-hop alert**: when someone already refused or sent away tries another hub, the alert goes to every selected group (and to the group if the log came from a private chat).
 - 🟡 **Readmit reminder**: when a sent-away person's 30 minutes are up: "52 YY 14 may now be readmitted if fit".
 - 🌙 **End-of-night summary** at 23:30 (only if anything was logged that night).
+- 🗂️ **Nightly backup**: at the same time, each **group admin** gets the spreadsheet in a private chat, before the 24-hour auto-delete.
+- ✅ **Health**: group admins get a private "Gatekeeper is online" after the bot starts, and on the Android phone 🔌 / 🪫 alerts when it's unplugged or below 20% battery. Battery alerts need the free **Termux:API** app (F-Droid, same source as Termux).
 | a log for a seat already flagged at another hub | 🚨 ALREADY REFUSED … second attempt, ⛔ do not admit |
 
 The bot asks for anything missing, one question at a time, with numbered options:
@@ -207,6 +214,8 @@ Then show your colleagues the table at the top of this page.
 | `WA_HUBHOP_ALERTS` | on | 🚨 Post hub-hop alerts to the selected groups. `off` to stop. |
 | `WA_READMIT_REMINDERS` | on | 🟡 Post when a sent-away person may come back. `off` to stop. |
 | `SUMMARY_TIME` | `23:30` | 🌙 Time of the end-of-night summary (`HH:MM`), or `off`. |
+| `WA_NIGHTLY_BACKUP` | on | 🗂️ Send the spreadsheet privately to group admins at `SUMMARY_TIME`. `off` to stop. |
+| `WA_HEALTH_ALERTS` | on | ✅ "online" message and 🔌/🪫 battery alerts to group admins. `off` to stop. |
 | `WA_SUPERVISOR_ONLY` | on | `CLEAR` and `REPORT` only for group admins. `off` lets anyone in the group use them (not recommended: anyone could let a refused person in, or download everyone's descriptions). |
 
 On the Android phone, change these with `gk-set`, e.g. `gk-set SUMMARY_TIME 22:45` or `gk-set WA_READMIT_REMINDERS off`. On Render, use the Environment tab.

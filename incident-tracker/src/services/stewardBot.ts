@@ -1,6 +1,6 @@
 import { getConfig } from '../config/env';
 import { getPool, isConnectivityError } from '../db/pool';
-import { listRecords, recordsToCsv, updateRecord, type RecordRow } from './adminRecords';
+import { addNote, getNotes, listRecords, recordsToCsv, updateRecord, type RecordRow } from './adminRecords';
 import { currentStats } from './nightReport';
 import { HUBS, type Hub } from '../domain';
 import { parseGroupMessage } from './commandParser';
@@ -44,15 +44,17 @@ export interface OutboundReply {
 
 // ---------------------------------------------------------------- parsing
 
-const DECISION_RE = /^\s*(refused|refuse|ref|r|sent\s*away|sent|sa|30\s*min(?:ute)?s?|30|cool\s*-?\s*off|cooling\s*off|cooloff|cool)\b[\s:,-]*/i;
+const DECISION_RE = /^\s*(ejected|eject|refused|refuse|ref|r|sent\s*away|sent|sa|30\s*min(?:ute)?s?|30|cool\s*-?\s*off|cooling\s*off|cooloff|cool)\b[\s:,-]*/i;
 const HUB_RE = /^\s*(east|west|south|hosp(?:itality)?)(?:\s*hub)?\b[\s:,]*/i;
 const SEAT_RE =
   /^\s*(?:(?:section|sect|sec|block|blk)\.?\s*)?([a-z0-9]{1,6})\s*[\s/,|]\s*(?:(?:row|rw)\.?\s*)?([a-z0-9]{1,4})\s*[\s/,|]\s*(?:(?:seat|st)\.?\s*)?(\d{1,4})\b[\s:,]*/i;
 
+const PARTY_RE = /(?:^|\s)(?:x(\d{1,2})|(?:party|group)(?:\s+of)?\s+(\d{1,2}))(?=\s|$|[,.])/i;
+
 export function parseDecision(word: string): Decision | null {
   const m = DECISION_RE.exec(word);
   if (!m) return null;
-  return /^(refused|refuse|ref|r)$/i.test(m[1].trim()) ? 'refused' : 'cool_off';
+  return /^(refused|refuse|ref|r|ejected|eject)$/i.test(m[1].trim()) ? 'refused' : 'cool_off';
 }
 
 export function parseHub(word: string): Hub | null {
@@ -197,6 +199,8 @@ export function parseDetails(text: string, from: DetailField = 'reasons'): Detai
 
 export interface ParsedLog extends Details {
   decision?: Decision;
+  ejected?: boolean; // removed from inside the venue (stored as refused, marked "Ejected")
+  party?: number; // people in the group ("x3", "party of 3")
   section?: string;
   row?: string;
   seat?: string;
@@ -212,6 +216,7 @@ export function parseLogCommand(text: string | null | undefined): ParsedLog | nu
   const short = /^(r|sa|sent)$/i.test(d[1].trim());
   let rest = text.slice(d[0].length);
   const out: ParsedLog = { decision: parseDecision(d[1])! };
+  if (/^eject/i.test(d[1])) out.ejected = true;
 
   const s = SEAT_RE.exec(rest);
   if (s) {
@@ -226,6 +231,12 @@ export function parseLogCommand(text: string | null | undefined): ParsedLog | nu
   if (h) {
     out.hub = parseHub(h[1])!;
     rest = rest.slice(h[0].length);
+  }
+  // Party size anywhere after the seat: "x3", "party of 3", "group 3".
+  const party = PARTY_RE.exec(rest);
+  if (party) {
+    out.party = Number(party[1] ?? party[2]);
+    rest = (rest.slice(0, party.index) + ' ' + rest.slice(party.index + party[0].length)).replace(/\s+/g, ' ').trim();
   }
   return Object.assign(out, parseDetails(rest));
 }
@@ -242,6 +253,8 @@ export function parseSeatAnswer(text: string): Pick<ParsedLog, 'section' | 'row'
 type Field = 'decision' | 'seat' | 'hub' | 'reasons' | 'other' | 'gender' | 'height' | 'build' | 'age' | 'clothing';
 
 interface Pending extends ParsedLog {
+  editTicketId?: string; // EDIT: re-asking the details of a saved record
+  editLabel?: string;
   otherReason?: string; // what happened, when "Other" is one of the reasons ('' = skipped)
   ticketCode?: string;
   photo?: { data: Buffer; mime: string };
@@ -279,7 +292,7 @@ const numbered = (opts: readonly string[]) => opts.map((o, i) => `*${i + 1}* ${o
 const SKIP = '\n_(*-* to skip)_';
 
 const PROMPTS: Record<Field, string> = {
-  decision: 'Refused entry, or sent away for 30 minutes? Reply with a number:\n*1* Refused entry\n*2* Sent away 30 min',
+  decision: 'Refused entry, sent away for 30 minutes, or ejected? Reply with a number:\n*1* Refused entry\n*2* Sent away 30 min\n*3* Ejected (removed from inside)',
   seat: 'Which seat? Send section, row and seat, e.g. *52 YY 14*.',
   hub: `Which hub are you at? Reply with a number:\n${numbered(HUBS.map((h) => h.replace(' Hub', '')))}`,
   reasons: `Reason? Reply with a number:\n${numbered(REASONS)}\n_More than one? Send all the numbers, e.g. *1 3 5*_`,
@@ -364,6 +377,14 @@ export class StewardBot {
     if (/^list$/i.test(text)) return [{ text: await this.list() }];
     if (/^stats$/i.test(text)) return [{ text: await this.stats() }];
     if (/^report$/i.test(text)) return [await this.report(m)];
+    const find = /^(?:find|search)\s+(.+)$/i.exec(text);
+    if (find && !m.image) return [{ text: await this.find(find[1]) }];
+    const note = /^note\s+(.+)$/i.exec(text);
+    if (note && !m.image) return [{ text: await this.note(note[1], m) }];
+    const party = /^party\s+(.+)$/i.exec(text);
+    if (party && !m.image) return [{ text: await this.setParty(party[1]) }];
+    const edit = /^edit\s+(.+)$/i.exec(text);
+    if (edit && !m.image) return this.startEdit(edit[1], m, k);
     const clear = /^clear\s+(.+)$/i.exec(text);
     if (clear && !m.image) return [{ text: await this.clear(clear[1], m) }];
     const photoCmd = /^photo\s+(.+)$/i.exec(text);
@@ -429,6 +450,7 @@ export class StewardBot {
     const asked = p.asked;
     if (!text) return false;
     if (asked === 'decision' || (!asked && !p.decision)) {
+      if (/^3$/.test(text) || /^eject(ed)?$/i.test(text)) return (p.decision = 'refused'), (p.ejected = true), true;
       const d = /^1$/.test(text) ? 'refused' : /^2$/.test(text) ? 'cool_off' : parseDecision(text);
       if (d) return (p.decision = d), true;
     }
@@ -462,6 +484,12 @@ export class StewardBot {
   }
 
   private nextMissing(p: Pending): Field | null {
+    if (p.editTicketId) {
+      if (!p.reasons?.length) return 'reasons';
+      if (p.reasons.includes('Other') && p.otherReason === undefined) return 'other';
+      for (const f of DESCRIPTION_FIELDS) if (p[f] === undefined) return f;
+      return null;
+    }
     if (!p.decision) return 'decision';
     if (!p.seat) return 'seat';
     if (!p.hub) return 'hub';
@@ -481,10 +509,26 @@ export class StewardBot {
       return [{ text: intro ? `${intro} ${q}` : q }];
     }
     this.pending.delete(this.key(m));
-    return [{ text: await this.commit(m, p) }];
+    return [{ text: p.editTicketId ? await this.commitEdit(p) : await this.commit(m, p) }];
   }
 
   // ---------------------------------------------------------------- saving
+
+  private async commitEdit(p: Pending): Promise<string> {
+    const reason = reasonText(p) ?? 'Not provided';
+    const desc = describe(p) || 'Not provided';
+    try {
+      const ok = await updateRecord(p.editTicketId!, { reasoning: reason, description: desc });
+      if (!ok) return `That record is gone (deleted or expired). Log *${p.editLabel}* again if needed.`;
+      if (p.photo) {
+        await getPool().query('INSERT INTO ticket_photos (ticket_id, mime_type, data) VALUES ($1, $2, $3)', [p.editTicketId, p.photo.mime, p.photo.data]);
+      }
+      return `✏️ *Updated* · ${p.editLabel}\n📝 ${sanitize(reason, 200)}\n👤 ${sanitize(desc, 200)}`;
+    } catch (err) {
+      console.error('[steward-bot] edit failed:', (err as Error).message);
+      return '⚠️ Couldn’t save that change. Try again, or use the records page.';
+    }
+  }
 
   private async commit(m: InboundMessage, p: Pending): Promise<string> {
     const hub = p.hub!;
@@ -498,6 +542,7 @@ export class StewardBot {
       hub_location: hub,
       steward_name: (m.senderName || 'Steward').slice(0, 100),
       action_logged: p.decision,
+      party_size: p.party,
       description: describe(p) || undefined,
       reasoning: reasonText(p),
       occurred_at: at.toISOString(),
@@ -541,6 +586,92 @@ export class StewardBot {
     this.lastLogs.delete(senderId);
     const { rowCount } = await getPool().query('DELETE FROM tickets WHERE ticket_id = $1', [last.ticketId]);
     return rowCount ? '↩️ Removed your last record.' : 'That record was already gone.';
+  }
+
+  // ---------------------------------------------------------------- FIND, NOTE, PARTY, EDIT
+
+  /** FIND green hat: search tonight's records by description, reason, notes or seat. */
+  private async find(query: string): Promise<string> {
+    const q = query.trim().replace(/\s+/g, ' ');
+    if (q.length < 2) return 'Send a few words to search for, e.g. *FIND green hat*.';
+    try {
+      const rows = await listRecords({ q: q.slice(0, 100) }, 50);
+      if (!rows.length) return `🔎 Nothing on record matches “${sanitize(q, 60)}”.`;
+      const now = new Date(this.now());
+      const shown = rows.slice(0, 10).map((r) => recordLine(r, statusIcon(r, now)));
+      return (
+        `🔎 ${rows.length} match${rows.length === 1 ? '' : 'es'} for “${sanitize(q, 60)}”:\n` +
+        shown.join('\n') +
+        (rows.length > 10 ? `\n_…and ${rows.length - 10} more. Add more words to narrow it down._` : '') +
+        `\n_Send the seat for full details and the photo._`
+      );
+    } catch (err) {
+      console.error('[steward-bot] find failed:', (err as Error).message);
+      return '⚠️ Gatekeeper can’t reach its database right now. Try again in a minute.';
+    }
+  }
+
+  /** "52 YY 14 rest of text" -> the seat and what follows it. */
+  private splitSeat(arg: string): { seat: Pick<ParsedLog, 'section' | 'row' | 'seat'>; rest: string } | null {
+    const s = SEAT_RE.exec(arg);
+    if (!s) return null;
+    return { seat: { section: s[1].toUpperCase(), row: s[2].toUpperCase(), seat: s[3] }, rest: arg.slice(s[0].length).trim() };
+  }
+
+  /** NOTE 52 YY 14 came back calm. */
+  private async note(arg: string, m: InboundMessage): Promise<string> {
+    const sp = this.splitSeat(arg);
+    if (!sp) return 'Send *NOTE*, the seat, then the note, e.g. *NOTE 52 YY 14 came back calm*.';
+    if (!sp.rest) return `Add the note after the seat, e.g. *NOTE ${sp.seat.section} ${sp.seat.row} ${sp.seat.seat} came back calm*.`;
+    try {
+      const f = await this.findBySeat(`${sp.seat.section} ${sp.seat.row} ${sp.seat.seat}`);
+      if (!f.profile) return f.error!;
+      await addNote(f.profile.ticket_id, (m.senderName || 'Steward').slice(0, 100), sp.rest);
+      return `🗒️ Note added to *${f.label}*.`;
+    } catch (err) {
+      console.error('[steward-bot] note failed:', (err as Error).message);
+      return '⚠️ Couldn’t save that note. Try again.';
+    }
+  }
+
+  /** PARTY 52 YY 14 3: how many people are in the group. */
+  private async setParty(arg: string): Promise<string> {
+    const sp = this.splitSeat(arg);
+    const n = sp ? Number(/^(?:x\s*)?(\d{1,2})$/i.exec(sp.rest)?.[1]) : NaN;
+    if (!sp || !(n >= 1)) return 'Send *PARTY*, the seat, then the number of people, e.g. *PARTY 52 YY 14 3*.';
+    try {
+      const f = await this.findBySeat(`${sp.seat.section} ${sp.seat.row} ${sp.seat.seat}`);
+      if (!f.profile) return f.error!;
+      await getPool().query('UPDATE tickets SET party_size = $2 WHERE ticket_id = $1', [f.profile.ticket_id, n]);
+      return `👥 *${f.label}* is now a party of ${n}.`;
+    } catch (err) {
+      console.error('[steward-bot] party failed:', (err as Error).message);
+      return '⚠️ Couldn’t save that. Try again.';
+    }
+  }
+
+  /** EDIT 52 YY 14: re-ask the reasons and description. Your own last log, or any record for group admins. */
+  private async startEdit(arg: string, m: InboundMessage, k: string): Promise<OutboundReply[]> {
+    try {
+      const f = await this.findBySeat(arg);
+      if (!f.profile) return [{ text: f.error! }];
+      const own = this.lastLogs.get(m.senderId)?.ticketId === f.profile.ticket_id;
+      if (!own) {
+        const denied = await this.supervisorOnly(m, 'edit someone else’s record');
+        if (denied) return [{ text: denied }];
+      }
+      const p: Pending = {
+        startedAt: this.now(),
+        editTicketId: f.profile.ticket_id,
+        editLabel: f.label,
+        ejected: /^Ejected/.test(f.profile.reasoning),
+      };
+      this.pending.set(k, p);
+      return this.advance(m, p, `✏️ Editing *${f.label}*. Answer again; *CANCEL* keeps it as it was.\n`);
+    } catch (err) {
+      console.error('[steward-bot] edit failed:', (err as Error).message);
+      return [{ text: '⚠️ Gatekeeper can’t reach its database right now. Try again in a minute.' }];
+    }
   }
 
   // ---------------------------------------------------------------- STATS, REPORT, CLEAR, PHOTO
@@ -631,17 +762,7 @@ export class StewardBot {
     if (!refused.length && !away.length) return '✅ Nobody is refused or sent away right now.';
 
     const MAX = 30;
-    const entry = (r: RecordRow, extra?: string) => {
-      const seat = r.section ? `${r.section} ${r.row_label} ${r.seat_number}` : r.ticket_id;
-      const head = [`• *${sanitize(seat, 40)}*`];
-      if (r.reasoning && r.reasoning !== 'Not provided') head.push(sanitize(r.reasoning, 80));
-      if (r.origin_hub) head.push(`${r.origin_hub.replace(' Hub', '')}${r.origin_at ? ` ${formatClock(r.origin_at)}` : ''}`);
-      if (extra) head.push(extra);
-      if (r.breaches) head.push(`🚨 tried again ×${r.breaches}`);
-      if (r.photos) head.push('📷');
-      const desc = r.description && r.description !== 'Not provided' ? `\n   👤 ${sanitize(r.description, 90)}` : '';
-      return head.join(' · ') + desc;
-    };
+    const entry = (r: RecordRow, extra?: string) => recordLine(r, '•', extra);
     const section = (title: string, list: RecordRow[], extra?: (r: RecordRow) => string) =>
       `${title} (${list.length})\n` +
       list.slice(0, MAX).map((r) => entry(r, extra?.(r))).join('\n') +
@@ -668,8 +789,12 @@ export class StewardBot {
         profile = await getTicketProfileBySeat(cmd.section, cmd.row, cmd.seat);
         if (!profile && cmd.fallbackTicketId) profile = await getTicketProfile(cmd.fallbackTicketId);
       }
-      const text = formatQuickCheck(profile, cmd.kind === 'check' ? { ticketId: cmd.ticketId } : cmd);
+      let text = formatQuickCheck(profile, cmd.kind === 'check' ? { ticketId: cmd.ticketId } : cmd);
       if (!profile) return { text };
+      const notes = await getNotes(profile.ticket_id);
+      if (notes.length) {
+        text += '\n' + notes.slice(-3).map((n) => `🗒️ ${formatClock(n.created_at)} ${sanitize(n.author, 40)}: ${sanitize(n.body, 160)}`).join('\n');
+      }
       const photo = await latestPhoto(profile.ticket_id);
       return photo ? { text, image: photo } : { text };
     } catch (err) {
@@ -677,6 +802,26 @@ export class StewardBot {
       return { text: '⚠️ Gatekeeper can’t reach its database right now. Treat this seat as *unchecked* and ask a supervisor.' };
     }
   }
+}
+
+function statusIcon(r: RecordRow, now: Date): string {
+  if (r.current_status === 'admitted') return '🟢';
+  if (r.current_status === 'completely_refused') return /^Ejected/.test(r.reasoning) ? '⛔' : '🔴';
+  return r.cool_down_until && new Date(r.cool_down_until) > now ? '🟠' : '🟡';
+}
+
+/** One record in LIST / FIND: "• *52 YY 14* · Intoxicated · West 21:40 · 👥3 · 📷" plus the description. */
+function recordLine(r: RecordRow, bullet: string, extra?: string): string {
+  const seat = r.section ? `${r.section} ${r.row_label} ${r.seat_number}` : r.ticket_id;
+  const head = [`${bullet} *${sanitize(seat, 40)}*`];
+  if (r.reasoning && r.reasoning !== 'Not provided') head.push(sanitize(r.reasoning, 80));
+  if (r.origin_hub) head.push(`${r.origin_hub.replace(' Hub', '')}${r.origin_at ? ` ${formatClock(r.origin_at)}` : ''}`);
+  if (extra) head.push(extra);
+  if (r.party_size > 1) head.push(`👥${r.party_size}`);
+  if (r.breaches) head.push(`🚨 tried again ×${r.breaches}`);
+  if (r.photos) head.push('📷');
+  const desc = r.description && r.description !== 'Not provided' ? `\n   👤 ${sanitize(r.description, 90)}` : '';
+  return head.join(' · ') + desc;
 }
 
 async function latestPhoto(ticketId: string): Promise<{ data: Buffer; mime: string } | null> {
@@ -698,8 +843,9 @@ function describe(p: Pending): string {
 
 /** "Intoxicated, Abusive, Other: threw a bottle". */
 function reasonText(p: Pending): string | undefined {
-  if (!p.reasons?.length) return undefined;
-  return p.reasons.map((r) => (r === 'Other' && p.otherReason ? `Other: ${p.otherReason}` : r)).join(', ');
+  if (!p.reasons?.length) return p.ejected ? 'Ejected' : undefined;
+  const list = p.reasons.map((r) => (r === 'Other' && p.otherReason ? `Other: ${p.otherReason}` : r)).join(', ');
+  return p.ejected ? `Ejected: ${list}` : list;
 }
 
 function confirmation(o: ScanOutcome, hub: Hub, p: Pending): string {
@@ -708,7 +854,8 @@ function confirmation(o: ScanOutcome, hub: Hub, p: Pending): string {
   const when = formatClock(o.evaluatedAt);
   const reason = reasonText(p);
   const desc = describe(p);
-  const notes = (reason ? `\n📝 ${sanitize(reason, 200)}` : '') + (desc ? `\n👤 ${sanitize(desc, 200)}` : '');
+  const party = p.party && p.party > 1 ? `\n👥 Party of ${p.party}` : '';
+  const notes = (reason ? `\n📝 ${sanitize(reason, 200)}` : '') + (desc ? `\n👤 ${sanitize(desc, 200)}` : '') + party;
   const origin = o.originEvent;
 
   switch (o.scenario) {
@@ -726,7 +873,7 @@ function confirmation(o: ScanOutcome, hub: Hub, p: Pending): string {
       return (
         (t.current_status === 'cooling_off'
           ? `✅ Logged 🟠 *SENT AWAY 30 MIN* · ${seat}\n${hub} ${when} · back after ${t.cool_down_until ? formatClock(t.cool_down_until) : '?'}`
-          : `✅ Logged 🔴 *REFUSED* · ${seat}\n${hub} ${when}`) +
+          : `✅ Logged ${p.ejected ? '⛔ *EJECTED*' : '🔴 *REFUSED*'} · ${seat}\n${hub} ${when}`) +
         notes +
         `\n_Reply UNDO within 15 min if this was a mistake._`
       );
@@ -735,14 +882,14 @@ function confirmation(o: ScanOutcome, hub: Hub, p: Pending): string {
 
 export const STEWARD_HELP =
   '🤖 *GATEKEEPER*\n\n' +
-  '*Check a seat:* send section, row, seat, e.g. *52 YY 14*\n' +
-  '*LIST*: everyone refused or sent away right now · *STATS*: tonight’s numbers\n' +
-  'Photo captioned *PHOTO 52 YY 14*: add a photo to a saved record\n' +
-  '_Group admins only:_ *CLEAR 52 YY 14* (may enter now) · *REPORT* in a private chat (the spreadsheet)\n\n' +
-  '*Log someone:* send *REFUSED 52 YY 14 West* or *30 52 YY 14 West* (sent away 30 min), ' +
-  'or a photo of them or their ticket QR with the seat as the caption, or just *LOG*.\n' +
+  '*Log someone:* *REFUSED 52 YY 14 West*, *30 52 YY 14 West* (sent away 30 min) or *EJECTED 52 YY 14 West*; ' +
+  'or a photo of them or their ticket QR with the seat as the caption; or just *LOG*. Add *x3* for a group of 3.\n' +
   'I’ll then ask: hub, reasons, male/female, height, build, minor or adult, and what they’re wearing.\n' +
-  '*BACK*: change your last answer · *CANCEL*: stop a log\n\n' +
-  `*Reasons* (send one or more, e.g. *1 3 5*): ${REASONS.map((r, i) => `${i + 1} ${r}`).join(' · ')}\n\n` +
-  '*UNDO*: remove your last saved record (within 15 min)\n' +
+  '*BACK*: change your last answer · *CANCEL*: stop · *UNDO*: remove your last saved record (15 min)\n' +
+  `*Reasons* (one or more, e.g. *1 3 5*): ${REASONS.map((r, i) => `${i + 1} ${r}`).join(' · ')}\n\n` +
+  '*Check:* send the seat, e.g. *52 YY 14* · *FIND green hat*: search descriptions\n' +
+  '*LIST*: who is refused or sent away now · *STATS*: tonight’s numbers\n\n' +
+  '*Add to a saved record:* *NOTE 52 YY 14 came back calm* · *PARTY 52 YY 14 3* · ' +
+  'a photo captioned *PHOTO 52 YY 14* · *EDIT 52 YY 14* (your own log; admins: any)\n' +
+  '_Group admins only:_ *CLEAR 52 YY 14* (may enter now) · *REPORT* in a private chat (the spreadsheet)\n\n' +
   '_Records are deleted automatically after 24 hours._';

@@ -30,6 +30,8 @@ export interface RecordRow {
   origin_at: Date | null;
   breaches: number;
   photos: number;
+  party_size: number;
+  notes: string | null; // "22:10 Dave: came back calm | …", oldest first
 }
 
 export function parseFilter(query: Record<string, unknown>): RecordFilter {
@@ -50,14 +52,18 @@ export async function listRecords(f: RecordFilter, limit = 500): Promise<RecordR
             t.created_at, t.updated_at, t.section, t.row_label, t.seat_number,
             o.hub_location AS origin_hub, o.steward_name AS origin_steward, o.timestamp AS origin_at,
             (SELECT count(*)::int FROM scan_events b WHERE b.ticket_id = t.ticket_id AND b.is_breach_event) AS breaches,
-            (SELECT count(*)::int FROM ticket_photos p WHERE p.ticket_id = t.ticket_id) AS photos
+            (SELECT count(*)::int FROM ticket_photos p WHERE p.ticket_id = t.ticket_id) AS photos,
+            t.party_size,
+            (SELECT string_agg(n.author || ': ' || n.body, ' | ' ORDER BY n.created_at)
+               FROM ticket_notes n WHERE n.ticket_id = t.ticket_id) AS notes
        FROM tickets t
        LEFT JOIN LATERAL (
          SELECT hub_location, steward_name, timestamp FROM scan_events e
           WHERE e.ticket_id = t.ticket_id ORDER BY timestamp ASC LIMIT 1
        ) o ON TRUE
-      WHERE ($1::text IS NULL OR upper(concat_ws(' ', t.section, t.row_label, t.seat_number, t.description, t.reasoning, t.ticket_id))
-                                 LIKE '%' || upper($1::text) || '%')
+      WHERE ($1::text IS NULL
+             OR upper(concat_ws(' ', t.section, t.row_label, t.seat_number, t.description, t.reasoning, t.ticket_id)) LIKE '%' || upper($1::text) || '%'
+             OR EXISTS (SELECT 1 FROM ticket_notes q WHERE q.ticket_id = t.ticket_id AND upper(q.body) LIKE '%' || upper($1::text) || '%'))
         AND ($2::text IS NULL OR EXISTS (SELECT 1 FROM scan_events h WHERE h.ticket_id = t.ticket_id AND h.hub_location::text = $2::text))
         AND ($3::text IS NULL OR t.current_status::text = $3::text)
         AND (NOT $4::boolean OR EXISTS (SELECT 1 FROM scan_events x WHERE x.ticket_id = t.ticket_id AND x.is_breach_event))
@@ -70,10 +76,10 @@ export async function listRecords(f: RecordFilter, limit = 500): Promise<RecordR
 
 export async function getRecord(ticketId: string) {
   const pool = getPool();
-  const [t, events, photos] = await Promise.all([
+  const [t, events, photos, notes] = await Promise.all([
     pool.query<RecordRow>(
       `SELECT ticket_id, current_status, description, reasoning, cool_down_until, created_at, updated_at,
-              section, row_label, seat_number
+              section, row_label, seat_number, party_size
          FROM tickets WHERE ticket_id = $1`,
       [ticketId],
     ),
@@ -86,9 +92,32 @@ export async function getRecord(ticketId: string) {
       'SELECT id, created_at FROM ticket_photos WHERE ticket_id = $1 ORDER BY created_at DESC',
       [ticketId],
     ),
+    getNotes(ticketId),
   ]);
   if (!t.rows[0]) return null;
-  return { ...t.rows[0], events: events.rows, photos: photos.rows };
+  return { ...t.rows[0], events: events.rows, photos: photos.rows, notes };
+}
+
+export interface TicketNote {
+  author: string;
+  body: string;
+  created_at: Date;
+}
+
+export async function getNotes(ticketId: string): Promise<TicketNote[]> {
+  const { rows } = await getPool().query<TicketNote>(
+    'SELECT author, body, created_at FROM ticket_notes WHERE ticket_id = $1 ORDER BY created_at',
+    [ticketId],
+  );
+  return rows;
+}
+
+/** Adds a note and counts it as activity on the record (so the 24h retention restarts). */
+export async function addNote(ticketId: string, author: string, body: string): Promise<void> {
+  const text = body.trim().slice(0, 500);
+  if (!text) throw new Error('Empty note');
+  await getPool().query('INSERT INTO ticket_notes (ticket_id, author, body) VALUES ($1, $2, $3)', [ticketId, author.slice(0, 100) || 'Steward', text]);
+  await getPool().query('UPDATE tickets SET party_size = party_size WHERE ticket_id = $1', [ticketId]); // fires the updated_at trigger
 }
 
 export async function getPhoto(ticketId: string, photoId: string): Promise<{ data: Buffer; mime: string } | null> {
@@ -156,10 +185,10 @@ function csvCell(v: unknown): string {
 }
 
 export function recordsToCsv(rows: RecordRow[]): string {
-  const head = ['Section', 'Row', 'Seat', 'Status', 'Reason', 'Description', 'First hub', 'Logged by', 'Logged at', 'Back after', 'Tried another hub', 'Photos', 'Ticket'];
+  const head = ['Section', 'Row', 'Seat', 'Status', 'Reason', 'Description', 'Party', 'Notes', 'First hub', 'Logged by', 'Logged at', 'Back after', 'Tried another hub', 'Photos', 'Ticket'];
   const lines = rows.map((r) =>
     [
-      r.section, r.row_label, r.seat_number, STATUS_TEXT[r.current_status], r.reasoning, r.description,
+      r.section, r.row_label, r.seat_number, STATUS_TEXT[r.current_status], r.reasoning, r.description, r.party_size, r.notes,
       r.origin_hub, r.origin_steward, r.origin_at, r.cool_down_until, r.breaches, r.photos, r.ticket_id,
     ].map(csvCell).join(','),
   );

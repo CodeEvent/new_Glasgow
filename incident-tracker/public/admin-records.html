@@ -225,7 +225,7 @@
   const notGiven = (s) => !s || s === 'Not provided';
 
   function statusOf(r, now) {
-    if (r.current_status === 'completely_refused') return { cls: 'refused', text: '🔴 REFUSED' };
+    if (r.current_status === 'completely_refused') return { cls: 'refused', text: /^Ejected/.test(r.reasoning || '') ? '⛔ EJECTED' : '🔴 REFUSED' };
     if (r.current_status === 'admitted') return { cls: 'admitted', text: '🟢 ADMITTED' };
     const left = r.cool_down_until ? Math.ceil((new Date(r.cool_down_until) - now) / 60000) : 0;
     return left > 0
@@ -305,9 +305,10 @@
       card.append(top);
       if (!notGiven(r.reasoning)) card.append(el('div', 'line', '📝 ' + r.reasoning));
       if (!notGiven(r.description)) card.append(el('div', 'line', '👤 ' + r.description));
-      const meta = [r.origin_hub, r.origin_steward && 'by ' + r.origin_steward, time(r.origin_at)].filter(Boolean).join(' · ');
+      const meta = [r.origin_hub, r.origin_steward && 'by ' + r.origin_steward, time(r.origin_at), r.party_size > 1 && `👥 ${r.party_size}`].filter(Boolean).join(' · ');
       card.append(el('div', 'meta', meta + (r.photos ? ` · 📷 ${r.photos}` : '')));
       if (r.breaches) card.append(el('div', 'breach', `🚨 Tried another hub ×${r.breaches}`));
+      if (r.notes) card.append(el('div', 'meta', '🗒️ ' + r.notes));
       card.addEventListener('click', () => open(r.ticket_id));
       list.append(card);
     }
@@ -355,6 +356,8 @@
       ev.append(li);
     }
     if (!r.events.length) ev.append(el('li', null, 'No history.'));
+    for (const n of r.notes || []) ev.append(el('li', null, `${time(n.created_at)} · 🗒️ ${n.author}: ${n.body}`));
+    if (r.party_size > 1) ev.append(el('li', null, `👥 Party of ${r.party_size}`));
     $('dTicket').textContent = r.section ? `Ticket ${r.ticket_id}` : '';
   }
 

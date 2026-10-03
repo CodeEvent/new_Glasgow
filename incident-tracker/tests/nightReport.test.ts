@@ -82,4 +82,20 @@ describe.skipIf(!HAS_DB)('night jobs (PostgreSQL)', () => {
     expect(posts[0]).toContain('🔴 1 refused');
     expect(posts[0]).toContain('*Reasons:* Abusive 1');
   });
+
+  it('sends the CSV backup to admins at summary time', async () => {
+    process.env.SUMMARY_TIME = '23:30';
+    process.env.WA_READMIT_REMINDERS = 'off';
+    resetConfigCache();
+    await new StewardBot().handle(msg('REFUSED 313 H 02 West 2 -'));
+    const files: Array<{ text: string; fileName: string; csv: string }> = [];
+    let now = new Date('2099-01-03T23:29:30Z');
+    stop = startNightJobs(() => undefined, 15, () => now, (text, doc) => files.push({ text, fileName: doc.fileName, csv: doc.data.toString('utf8') }));
+    now = new Date('2099-01-03T23:30:05Z');
+    await waitFor(() => files.length > 0);
+    await sleep(80);
+    expect(files).toHaveLength(1);
+    expect(files[0].fileName).toBe('gatekeeper-2099-01-03.csv');
+    expect(files[0].csv).toContain('313,H,02,Refused,Abusive');
+  });
 });

@@ -60,6 +60,9 @@ const envObject = z.object({
   WA_READMIT_REMINDERS: onByDefault,
   // CLEAR and REPORT only for WhatsApp admins of a selected group ("off" = anyone in the group).
   WA_SUPERVISOR_ONLY: onByDefault,
+  // Private messages to group admins: the CSV at SUMMARY_TIME, and "online" / battery alerts.
+  WA_NIGHTLY_BACKUP: onByDefault,
+  WA_HEALTH_ALERTS: onByDefault,
   // End-of-night summary posted to the groups at this time (HH:MM, TZ_DISPLAY), or "off".
   SUMMARY_TIME: z
     .string()
