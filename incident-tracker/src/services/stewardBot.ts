@@ -295,6 +295,8 @@ export class StewardBot {
   private pending = new Map<string, Pending>();
   private hubs = new Map<string, { hub: Hub; at: number }>();
   private lastLogs = new Map<string, LastLog>();
+  /** A sender's last uncaptioned photo, so "PHOTO 52 YY 14" sent right after it still works. */
+  private loosePhotos = new Map<string, { image: { data: Buffer; mime: string }; at: number }>();
 
   /** Posts to the selected groups except `exceptChatId` (set by the WhatsApp channel). */
   announce?: (text: string, exceptChatId?: string) => void;
@@ -366,15 +368,24 @@ export class StewardBot {
     if (clear && !m.image) return [{ text: await this.clear(clear[1], m) }];
     const photoCmd = /^photo\s+(.+)$/i.exec(text);
     if (photoCmd) {
-      if (!m.image) return [{ text: `Send the customer's photo with the caption *PHOTO ${sanitize(photoCmd[1], 30)}*.` }];
-      return [{ text: await this.addPhoto(photoCmd[1], m.image) }];
+      const loose = this.loosePhotos.get(k);
+      const image = m.image ?? (loose && this.now() - loose.at < 5 * 60_000 ? loose.image : null);
+      if (!image) return [{ text: `Send the customer's photo with the caption *PHOTO ${sanitize(photoCmd[1], 30)}* (or send the photo, then this message).` }];
+      const reply = await this.addPhoto(photoCmd[1], image);
+      if (!m.image && reply.startsWith('📷')) this.loosePhotos.delete(k);
+      return [{ text: reply }];
     }
 
     // ---- images: a ticket QR starts (or feeds) a log; another photo is the customer's picture.
     if (m.image) {
       const qr = await decodeQrFromImage(m.image.data);
       const log = parseLogCommand(text) ?? (parseSeatAnswer(text) || (/^(log|new)$/i.test(text) ? {} : null));
-      if (!qr && !log && !p) return []; // an ordinary photo in the group: not for us
+      if (!qr && !log && !p) {
+        // An ordinary photo: stay quiet, but keep it a few minutes in case "PHOTO <seat>" follows.
+        for (const [key, v] of this.loosePhotos) if (this.now() - v.at > 5 * 60_000) this.loosePhotos.delete(key);
+        this.loosePhotos.set(k, { image: m.image, at: this.now() });
+        return [];
+      }
       p = p ?? { startedAt: this.now() };
       if (qr) p.ticketCode = await ticketCodeFromQr(qr);
       else p.photo = m.image;

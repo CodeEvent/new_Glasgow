@@ -278,6 +278,13 @@ export class LinkedWhatsApp {
           image = { data: await b.downloadMediaMessage(msg, 'buffer', {}), mime: img.mimetype ?? 'image/jpeg' };
         } catch (err) {
           console.error('[linked-wa] could not download photo:', (err as Error).message);
+          note('photo could not be downloaded');
+          await this.sock?.sendMessage(
+            jid,
+            { text: '⚠️ I couldn’t download that photo. Please send it again (as a normal photo, not “view once”).' },
+            { quoted: msg },
+          );
+          return;
         }
       }
       const text = img ? (img.caption ?? null) : messageText(msg.message);

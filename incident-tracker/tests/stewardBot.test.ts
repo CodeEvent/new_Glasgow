@@ -277,6 +277,19 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
     expect((await bot.handle(msg('sarah', '313 H 02')))[0].image?.data.equals(photo)).toBe(true);
   });
 
+  it('PHOTO also works as a separate message right after the photo', async () => {
+    await bot.handle(msg('dave', 'REFUSED 313 YY 56 West 1 -'));
+    const photo = await plainPhoto();
+    expect(await bot.handle(msg('dave', null, { image: { data: photo, mime: 'image/png' } }))).toEqual([]); // quiet
+    expect((await bot.handle(msg('sarah', 'PHOTO 313 yy 56')))[0].text).toContain('Send the customer'); // not Sarah's photo
+    expect((await bot.handle(msg('dave', 'PHOTO 313 yy 56')))[0].text).toContain('📷 Photo added to *313 YY 56*');
+    expect((await bot.handle(msg('sarah', '313 YY 56')))[0].image?.data.equals(photo)).toBe(true);
+    clock += 6 * 60_000;
+    await bot.handle(msg('dave', null, { image: { data: photo, mime: 'image/png' } }));
+    clock += 6 * 60_000;
+    expect((await bot.handle(msg('dave', 'PHOTO 313 yy 56')))[0].text).toContain('Send the customer'); // too late
+  });
+
   it('REPORT sends the spreadsheet only in a private chat', async () => {
     await bot.handle(msg('dave', 'REFUSED 313 H 02 West 1 -'));
     const [g] = await bot.handle(msg('dave', 'REPORT'));
