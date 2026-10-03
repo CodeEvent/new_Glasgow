@@ -262,6 +262,9 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
   it('CLEAR lets someone in and PHOTO adds a picture to a saved record', async () => {
     await bot.handle(msg('dave', 'REFUSED 313 H 02 West 1 -'));
     expect((await bot.handle(msg('sarah', 'CLEAR 1 2 3')))[0].text).toContain('Nothing on record for *1 2 3*');
+    bot.canSupervise = async (id) => id === 'sarah';
+    expect((await bot.handle(msg('dave', 'CLEAR 313 H 02')))[0].text).toContain('⛔ Only group admins');
+    expect((await bot.handle(msg('dave', 'REPORT', { chatId: '447700900111@s.whatsapp.net' })))[0].document).toBeUndefined();
     const [c] = await bot.handle(msg('sarah', 'clear 313 h 02'));
     expect(c.text).toContain('🟢 *313 H 02* cleared by Sarah');
     expect((await bot.handle(msg('sarah', '313 H 02')))[0].text).toContain('🟢 *ADMITTED*');

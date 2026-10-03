@@ -22,7 +22,7 @@ function fakeSocket(sent: Sent[]) {
       sent.push({ jid, content, quoted: Boolean(opts?.quoted) });
     },
     groupFetchAllParticipating: async () => ({
-      [GROUP]: { id: GROUP, subject: 'Stadium stewards', participants: [{ id: '111@lid', phoneNumber: '447700900111@s.whatsapp.net' }, { id: '222@lid' }] },
+      [GROUP]: { id: GROUP, subject: 'Stadium stewards', participants: [{ id: '111@lid', phoneNumber: '447700900111@s.whatsapp.net', admin: 'admin' }, { id: '222@lid' }] },
     }),
     requestPairingCode: async () => 'ABCDEFGH',
     logout: async () => undefined,
@@ -105,6 +105,20 @@ describe.skipIf(!HAS_DB)('linked WhatsApp bot routing (fake socket)', () => {
     await settle();
     expect(sent[0]).toMatchObject({ jid: '447700900111@s.whatsapp.net' });
     expect(sent[0].content.text).toContain('NOT REFUSED');
+  });
+
+  it('lets only group admins use CLEAR and REPORT', async () => {
+    deliver(waMsg(GROUP, { conversation: 'REFUSED BB 212 100 West 1 -' }, { participant: '111@lid' }));
+    await settle();
+    deliver(waMsg(GROUP, { conversation: 'CLEAR BB 212 100' }, { participant: '222@lid' }));
+    await settle();
+    expect(sent.at(-1)!.content.text).toContain('⛔ Only group admins');
+    deliver(waMsg('447700900111@s.whatsapp.net', { conversation: 'REPORT' })); // admin, private chat
+    await settle();
+    expect(sent.at(-1)!.content.document).toBeDefined();
+    deliver(waMsg(GROUP, { conversation: 'CLEAR BB 212 100' }, { participant: '111@lid' }));
+    await settle();
+    expect(sent.at(-1)!.content.text).toContain('🟢 *BB 212 100* cleared');
   });
 
   it('sends the stored photo back with a check', async () => {

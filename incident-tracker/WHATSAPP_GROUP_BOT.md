@@ -10,9 +10,11 @@ Stewards log and check refused patrons entirely inside your **work WhatsApp grou
 | `52 YY 14` (nothing logged) | ✅ NOT REFUSED |
 | `LIST` | everyone refused or sent away right now: seat, reasons, hub and time, description, 🚨 if they tried another hub |
 | `STATS` | tonight's numbers: refused, sent away, cleared, hub-hops, by reason, by hub, minors |
-| `CLEAR 52 YY 14` | 🟢 marks that person as allowed in now (e.g. a supervisor's decision), noting who and when |
+| `CLEAR 52 YY 14` (**group admins only**) | 🟢 marks that person as allowed in now, noting who and when |
 | a photo captioned `PHOTO 52 YY 14` | 📷 adds the photo to an already saved record |
-| `REPORT` (in a **private chat** with the bot) | the spreadsheet (CSV) of everything on record |
+| `REPORT` (**group admins only**, in a **private chat** with the bot) | the spreadsheet (CSV) of everything on record |
+
+**Supervisors = WhatsApp admins of the work group.** Make a supervisor a group admin (Group info → tap them → Make group admin) and they can use `CLEAR` and `REPORT`. Everyone else can log, check, `LIST` and `STATS`.
 
 **The bot also posts on its own** (each can be switched off, see Settings):
 - 🚨 **Hub-hop alert**: when someone already refused or sent away tries another hub, the alert goes to every selected group (and to the group if the log came from a private chat).
@@ -205,5 +207,6 @@ Then show your colleagues the table at the top of this page.
 | `WA_HUBHOP_ALERTS` | on | 🚨 Post hub-hop alerts to the selected groups. `off` to stop. |
 | `WA_READMIT_REMINDERS` | on | 🟡 Post when a sent-away person may come back. `off` to stop. |
 | `SUMMARY_TIME` | `23:30` | 🌙 Time of the end-of-night summary (`HH:MM`), or `off`. |
+| `WA_SUPERVISOR_ONLY` | on | `CLEAR` and `REPORT` only for group admins. `off` lets anyone in the group use them (not recommended: anyone could let a refused person in, or download everyone's descriptions). |
 
 On the Android phone, change these with `gk-set`, e.g. `gk-set SUMMARY_TIME 22:45` or `gk-set WA_READMIT_REMINDERS off`. On Render, use the Environment tab.

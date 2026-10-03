@@ -116,10 +116,12 @@ export class LinkedWhatsApp {
   private bot = (() => {
     const bot = new StewardBot();
     bot.announce = (text, exceptChatId) => void this.postToGroups(text, exceptChatId);
+    bot.canSupervise = (senderId) => this.isAdmin(senderId);
     return bot;
   })();
   /** Everyone in the selected groups, so they can also talk to the bot in a private chat. */
   private members = new Set<string>();
+  private admins = new Set<string>(); // admins of the selected groups = supervisors (CLEAR, REPORT)
   private membersRefreshedAt = 0;
   private stopped = false;
   private attempts = 0;
@@ -301,25 +303,43 @@ export class LinkedWhatsApp {
     });
   }
 
+  /** Members (and admins) of the selected groups, refreshed at most every 10 minutes, or 1 minute for an unknown sender. */
+  private async refreshMembers(senderId: string, known: Set<string>): Promise<void> {
+    if (!this.sock) return;
+    const age = Date.now() - this.membersRefreshedAt;
+    if (age < (known.has(senderId) ? 10 * 60_000 : 60_000)) return;
+    try {
+      const all = await this.sock.groupFetchAllParticipating();
+      const ids = new Set<string>();
+      const admins = new Set<string>();
+      for (const g of Object.values(all)) {
+        if (!this.groups.some((s) => s.jid === g.id)) continue;
+        for (const p of g.participants as Array<Record<string, string | undefined>>) {
+          const pIds = ['id', 'jid', 'lid', 'phoneNumber'].map((k) => p[k]).filter((v): v is string => !!v);
+          for (const id of pIds) ids.add(id);
+          if (p.admin === 'admin' || p.admin === 'superadmin') for (const id of pIds) admins.add(id);
+        }
+      }
+      this.members = ids;
+      this.admins = admins;
+      this.membersRefreshedAt = Date.now();
+    } catch (err) {
+      console.error('[linked-wa] could not refresh group members:', (err as Error).message);
+    }
+  }
+
   private async isMember(senderId: string): Promise<boolean> {
     if (!this.sock || this.groups.length === 0) return false;
-    if (Date.now() - this.membersRefreshedAt > 10 * 60_000 || !this.members.has(senderId)) {
-      try {
-        const all = await this.sock.groupFetchAllParticipating();
-        const ids = new Set<string>();
-        for (const g of Object.values(all)) {
-          if (!this.groups.some((s) => s.jid === g.id)) continue;
-          for (const p of g.participants as Array<Record<string, string | undefined>>) {
-            for (const k of ['id', 'jid', 'lid', 'phoneNumber']) if (p[k]) ids.add(p[k]!);
-          }
-        }
-        this.members = ids;
-        this.membersRefreshedAt = Date.now();
-      } catch (err) {
-        console.error('[linked-wa] could not refresh group members:', (err as Error).message);
-      }
-    }
+    await this.refreshMembers(senderId, this.members);
     return this.members.has(senderId);
+  }
+
+  /** Supervisors are the WhatsApp admins of a selected group (switch off with WA_SUPERVISOR_ONLY=off). */
+  async isAdmin(senderId: string): Promise<boolean> {
+    if (!getConfig().WA_SUPERVISOR_ONLY) return true;
+    if (!this.sock || this.groups.length === 0) return false;
+    await this.refreshMembers(senderId, this.admins);
+    return this.admins.has(senderId);
   }
 
   /** One reply at a time per group, gently paced, with a cap so a flood can't build a backlog. */

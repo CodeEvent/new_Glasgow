@@ -124,8 +124,8 @@ F="$DATA/settings.env"
 touch "\$F"
 if [ \$# -lt 2 ]; then echo "Settings (\$F):"; cat "\$F"; echo "(empty = defaults)"; exit 0; fi
 case "\$1" in
-  SUMMARY_TIME|WA_HUBHOP_ALERTS|WA_READMIT_REMINDERS|COOL_OFF_MINUTES|RETENTION_HOURS|TZ_DISPLAY) ;;
-  *) echo "Unknown setting: \$1"; echo "Use one of: SUMMARY_TIME WA_HUBHOP_ALERTS WA_READMIT_REMINDERS COOL_OFF_MINUTES RETENTION_HOURS TZ_DISPLAY"; exit 1 ;;
+  SUMMARY_TIME|WA_HUBHOP_ALERTS|WA_READMIT_REMINDERS|WA_SUPERVISOR_ONLY|COOL_OFF_MINUTES|RETENTION_HOURS|TZ_DISPLAY) ;;
+  *) echo "Unknown setting: \$1"; echo "Use one of: SUMMARY_TIME WA_HUBHOP_ALERTS WA_READMIT_REMINDERS WA_SUPERVISOR_ONLY COOL_OFF_MINUTES RETENTION_HOURS TZ_DISPLAY"; exit 1 ;;
 esac
 case "\$2" in *\'*) echo "Values can't contain quotes."; exit 1 ;; esac
 grep -v "^\$1=" "\$F" > "\$F.tmp" || true

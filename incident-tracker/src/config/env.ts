@@ -58,6 +58,8 @@ const envObject = z.object({
   // post 🚨 when someone tries a second hub, and 🟡 when a sent-away person may come back.
   WA_HUBHOP_ALERTS: onByDefault,
   WA_READMIT_REMINDERS: onByDefault,
+  // CLEAR and REPORT only for WhatsApp admins of a selected group ("off" = anyone in the group).
+  WA_SUPERVISOR_ONLY: onByDefault,
   // End-of-night summary posted to the groups at this time (HH:MM, TZ_DISPLAY), or "off".
   SUMMARY_TIME: z
     .string()

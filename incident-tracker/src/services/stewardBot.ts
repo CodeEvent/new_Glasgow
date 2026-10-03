@@ -298,6 +298,14 @@ export class StewardBot {
 
   /** Posts to the selected groups except `exceptChatId` (set by the WhatsApp channel). */
   announce?: (text: string, exceptChatId?: string) => void;
+  /** Whether this sender may use supervisor commands (CLEAR, REPORT). Unset = everyone (tests, demo). */
+  canSupervise?: (senderId: string) => Promise<boolean>;
+
+  private async supervisorOnly(m: InboundMessage, what: string): Promise<string | null> {
+    if (!this.canSupervise || (await this.canSupervise(m.senderId).catch(() => false))) return null;
+    console.log(`[steward-bot] ${what} refused: sender is not a group admin`);
+    return `⛔ Only group admins (supervisors) can ${what}. Ask a supervisor, or a group admin can make you one.`;
+  }
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -538,6 +546,8 @@ export class StewardBot {
   /** The spreadsheet, only in a private chat (it holds descriptions of everyone logged). */
   private async report(m: InboundMessage): Promise<OutboundReply> {
     if (m.chatId.endsWith('@g.us')) return { text: 'Send *REPORT* to me in a private chat and I’ll send you the spreadsheet.' };
+    const denied = await this.supervisorOnly(m, 'get the report');
+    if (denied) return { text: denied };
     try {
       const rows = await listRecords({}, 10_000);
       if (!rows.length) return { text: 'Nothing is on record right now, so there’s no report.' };
@@ -563,6 +573,8 @@ export class StewardBot {
 
   /** CLEAR 52 YY 14: a supervisor says this person may enter now. */
   private async clear(seatText: string, m: InboundMessage): Promise<string> {
+    const denied = await this.supervisorOnly(m, 'clear someone');
+    if (denied) return denied;
     try {
       const f = await this.findBySeat(seatText);
       if (!f.profile) return f.error!;
@@ -714,8 +726,8 @@ export const STEWARD_HELP =
   '🤖 *GATEKEEPER*\n\n' +
   '*Check a seat:* send section, row, seat, e.g. *52 YY 14*\n' +
   '*LIST*: everyone refused or sent away right now · *STATS*: tonight’s numbers\n' +
-  '*CLEAR 52 YY 14*: may enter now · photo captioned *PHOTO 52 YY 14*: add a photo\n' +
-  '*REPORT* (private chat): the spreadsheet\n\n' +
+  'Photo captioned *PHOTO 52 YY 14*: add a photo to a saved record\n' +
+  '_Group admins only:_ *CLEAR 52 YY 14* (may enter now) · *REPORT* in a private chat (the spreadsheet)\n\n' +
   '*Log someone:* send *REFUSED 52 YY 14 West* or *30 52 YY 14 West* (sent away 30 min), ' +
   'or a photo of them or their ticket QR with the seat as the caption, or just *LOG*.\n' +
   'I’ll then ask: hub, reasons, male/female, height, build, minor or adult, and what they’re wearing.\n' +
