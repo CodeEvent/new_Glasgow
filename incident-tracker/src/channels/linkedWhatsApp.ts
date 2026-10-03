@@ -239,21 +239,30 @@ export class LinkedWhatsApp {
 
   private onMessage(msg: WAMessage): void {
     const jid = msg.key.remoteJid;
-    if (!jid || msg.key.fromMe) return; // never react to our own messages
-    if (jid.endsWith('@broadcast') || jid.endsWith('@newsletter')) return; // statuses, channels
-    if (Date.now() / 1000 - timestampSeconds(msg.messageTimestamp) > MAX_MESSAGE_AGE_S) return;
-
+    if (!jid || jid.endsWith('@broadcast') || jid.endsWith('@newsletter')) return; // statuses, channels
     const isGroup = jid.endsWith('@g.us');
+    const where = isGroup ? `group "${this.groups.find((g) => g.jid === jid)?.subject ?? 'not ticked'}"` : 'private chat';
+    // One line per message (never its text) so `gk-log` shows why the bot did or didn't answer.
+    const note = (what: string) => console.log(`[linked-wa] message in ${where}: ${what}`);
+
+    if (msg.key.fromMe) return note('sent by the bot’s own number, ignored (send from another phone)');
+    const age = Math.round(Date.now() / 1000 - timestampSeconds(msg.messageTimestamp));
+    if (age > MAX_MESSAGE_AGE_S) {
+      return note(`${age}s old, ignored as backlog${age > 600 ? ' (if you just sent it, this device’s clock is wrong: turn on automatic date & time)' : ''}`);
+    }
     if (isGroup && !this.groups.some((g) => g.jid === jid)) {
       this.seenGroups.set(jid, Date.now());
-      return;
+      return note('group not ticked on the setup page, ignored');
     }
     const senderId = isGroup ? (msg.key.participant ?? '') : jid;
-    if (!senderId) return;
+    if (!senderId) return note('no sender, ignored');
+    if (!msg.message) {
+      return note('could not be decrypted yet (normal for a few minutes after linking; send it again)');
+    }
 
     this.enqueue(jid, async () => {
       // Private chats are only for colleagues who are in a selected group.
-      if (!isGroup && !(await this.isMember(senderId))) return;
+      if (!isGroup && !(await this.isMember(senderId))) return note('sender is not in a ticked group, ignored');
 
       const img = messageImage(msg.message);
       let image: { data: Buffer; mime: string } | null = null;
@@ -266,7 +275,7 @@ export class LinkedWhatsApp {
         }
       }
       const text = img ? (img.caption ?? null) : messageText(msg.message);
-      if (!text && !image) return;
+      if (!text && !image) return note('no text or photo, ignored');
 
       const replies = await this.bot.handle({
         chatId: jid,
@@ -276,6 +285,7 @@ export class LinkedWhatsApp {
         image,
         at: new Date(timestampSeconds(msg.messageTimestamp) * 1000),
       });
+      note(replies.length ? `answered (${replies.length} repl${replies.length === 1 ? 'y' : 'ies'})` : 'not a log or seat check, no reply');
       for (const r of replies) {
         if (!this.sock) return;
         if (r.image) await this.sock.sendMessage(jid, { image: r.image.data, caption: r.text, mimetype: r.image.mime }, { quoted: msg });
