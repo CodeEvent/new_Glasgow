@@ -81,10 +81,13 @@ If Termux came from the Play Store and the install below fails at the first step
 
 **1. Stop the laptop bot first**, or both will answer every message: on the laptop's setup page click **Unlink**, then `Ctrl+C` in its terminal.
 
-**2. Install**: open Termux on the Android phone and paste:
+**2. Install**: open Termux on the Android phone and paste these three lines:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/CodeEvent/new_Glasgow/claude/inspiring-fermi-ujdf1c/incident-tracker/scripts/android/install.sh | bash
+pkg install -y git
+git clone --depth 1 -b claude/inspiring-fermi-ujdf1c https://github.com/CodeEvent/new_Glasgow.git ~/new_glasgow
+bash ~/new_glasgow/incident-tracker/scripts/android/install.sh
 ```
+If the first line fails, run `termux-change-repo`, pick another mirror, and try again. If `git clone` can't connect, switch between Wi-Fi and mobile data.
 It takes about 5–10 minutes the first time. At the end it prints the **admin key**.
 
 **3. Link**: in Chrome on the Android phone, open `http://localhost:3000/admin/whatsapp`, paste the admin key, and scan the QR with the phone that has the bot's WhatsApp number (WhatsApp → Settings → Linked devices → Link a device). Tick the work group, **Save**, **Send test**. The records page is `http://localhost:3000/admin/records` on the same phone.

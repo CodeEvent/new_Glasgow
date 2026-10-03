@@ -1,10 +1,19 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # Gatekeeper on an Android phone (Termux). Installs, or updates if already installed:
 #
-#   curl -fsSL https://raw.githubusercontent.com/CodeEvent/new_Glasgow/claude/inspiring-fermi-ujdf1c/incident-tracker/scripts/android/install.sh | bash
+#   pkg install -y git
+#   git clone --depth 1 -b claude/inspiring-fermi-ujdf1c https://github.com/CodeEvent/new_Glasgow.git ~/new_glasgow
+#   bash ~/new_glasgow/incident-tracker/scripts/android/install.sh
 #
 # Afterwards:  gk-start | gk-stop | gk-status | gk-key | gk-log | gk-update
 set -euo pipefail
+
+# This script updates the folder it lives in, so run a copy of it, not the file git may replace.
+if [ -f "$0" ] && [ -z "${GK_COPY:-}" ]; then
+  tmp="$(mktemp "${TMPDIR:-/tmp}/gk-install.XXXXXX")"
+  cp "$0" "$tmp"
+  GK_COPY=1 exec bash "$tmp" "$@"
+fi
 
 REPO="https://github.com/CodeEvent/new_Glasgow.git"
 BRANCH="${GK_BRANCH:-claude/inspiring-fermi-ujdf1c}"
@@ -95,7 +104,9 @@ cat > "$BIN/gk-update" <<EOF
 #!/data/data/com.termux/files/usr/bin/bash
 set -e
 gk-stop
-curl -fsSL "https://raw.githubusercontent.com/CodeEvent/new_Glasgow/$BRANCH/incident-tracker/scripts/android/install.sh" | bash
+git -C "$SRC" fetch --depth 1 origin "$BRANCH"
+git -C "$SRC" checkout -q -B "$BRANCH" FETCH_HEAD
+bash "$APP/scripts/android/install.sh"
 EOF
 chmod +x "$BIN"/gk-start "$BIN"/gk-stop "$BIN"/gk-status "$BIN"/gk-key "$BIN"/gk-log "$BIN"/gk-update
 
