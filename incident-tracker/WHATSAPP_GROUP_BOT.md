@@ -15,6 +15,8 @@ Stewards log and check refused patrons entirely inside your **work WhatsApp grou
 | `NOTE 52 YY 14 came back calm` | 🗒️ adds a note to a saved record; checks show the latest notes |
 | `REFUSED 300 L 205 206 207 West` (also `205,206,207`, `205, 206 and 207`, `205-207`) | 👥 logs a **group**: one record per seat, the questions asked once for everyone, marked "group of 3". Up to 20 seats. `UNDO` removes the whole group; `EDIT 300 L 206` changes one person. Write the hub after the seats: in `300 L 205 1 2`, the 1 and 2 are read as reasons. |
 | `300 L 205 206 207` | 🔎 checks every seat in one reply |
+| a photo/screenshot of the **ticket** captioned `REFUSED` (or `30`, `EJECTED`, or sent when the bot asks "Which seat?") | 🎫 reads section, row and seat from the ticket **on the phone** (nothing is uploaded). If it shows several seats, the bot lists them: reply `1 3` or `ALL`. Seats can be in different rows; each gets its own record. |
+| a ticket photo captioned `SCAN` | 🔎 reads the seats and checks them; send `REFUSED West 1 -` (or `30`/`EJECTED`) within 5 minutes to log them |
 | `PARTY 52 YY 14 3` | 👥 sets the group size. Or add `x3` / `party of 3` to the log line: `REFUSED 52 YY 14 West x3` |
 | `EJECTED 52 YY 14 West` | ⛔ logs someone removed from **inside** the venue (or answer *3* to the first question). Treated as refused at every gate. |
 | `EDIT 52 YY 14` | ✏️ re-asks the reasons and description of a saved record. Your own last log, or any record for group admins. `CANCEL` keeps it as it was. |
@@ -245,6 +247,7 @@ Then show your colleagues the table at the top of this page.
 | `SUMMARY_TIME` | `23:30` | 🌙 Time of the end-of-night summary (`HH:MM`), or `off`. |
 | `WA_NIGHTLY_BACKUP` | on | 🗂️ Send the spreadsheet privately to group admins at `SUMMARY_TIME`. `off` to stop. |
 | `WA_HEALTH_ALERTS` | on | ✅ "online" message and 🔌/🪫 battery alerts to group admins. `off` to stop. |
+| `OCR_ENABLED` | on | 🎫 Read seats from ticket photos on the phone. `off` to stop (saves battery). Ticketmaster's mobile QR codes are encrypted, so the seat is read from the printed text. |
 | `WA_SUPERVISOR_ONLY` | on | `CLEAR` and `REPORT` only for group admins. `off` lets anyone in the group use them (not recommended: anyone could let a refused person in, or download everyone's descriptions). |
 
 On the Android phone, change these with `gk-set`, e.g. `gk-set SUMMARY_TIME 22:45` or `gk-set WA_READMIT_REMINDERS off`. On Render, use the Environment tab.

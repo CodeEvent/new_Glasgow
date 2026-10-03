@@ -8,6 +8,7 @@ import { parseGroupMessage } from './commandParser';
 import { formatClock, minutesUntil, sanitize } from './format';
 import { appendOfflineIncident } from './offlineBuffer';
 import { decodeQrFromImage, ticketCodeFromQr } from './qrImage';
+import { readSeatsFromImage, seatsFromText, type SeatRef } from './ticketOcr';
 import { formatQuickCheck } from './quickCheck';
 import { processScan, scanInputSchema, type ScanOutcome } from './scanService';
 import { getTicketProfile, getTicketProfileBySeat } from './ticketLookup';
@@ -204,6 +205,7 @@ export interface ParsedLog extends Details {
   ejected?: boolean; // removed from inside the venue (stored as refused, marked "Ejected")
   party?: number; // people in the group ("x3", "party of 3")
   extraSeats?: string[]; // more seats in the same row: one record each ("300 L 205 206 207")
+  groupSeats?: SeatRef[]; // several seats across rows (from a ticket photo): one record each
   section?: string;
   row?: string;
   seat?: string;
@@ -293,11 +295,12 @@ export function takeExtraSeats(first: string, text: string, bare: boolean): { se
 
 // ---------------------------------------------------------------- conversation state
 
-type Field = 'decision' | 'seat' | 'hub' | 'reasons' | 'other' | 'gender' | 'height' | 'build' | 'age' | 'clothing' | 'confirm';
+type Field = 'decision' | 'choose' | 'seat' | 'hub' | 'reasons' | 'other' | 'gender' | 'height' | 'build' | 'age' | 'clothing' | 'confirm';
 
 interface Pending extends ParsedLog {
   editTicketId?: string; // EDIT: re-asking the details of a saved record
   editLabel?: string;
+  choices?: SeatRef[]; // seats read from a ticket photo, waiting for the steward to pick
   aiDraft?: boolean; // filled in by the AI helper: the steward must confirm before saving
   confirmed?: boolean;
   seatLookedUp?: string; // seat already checked against existing records (warned once)
@@ -310,7 +313,7 @@ interface Pending extends ParsedLog {
   startedAt: number;
 }
 
-const ANSWER_KEYS = ['decision', 'section', 'row', 'seat', 'extraSeats', 'hub', 'reasons', 'otherReason', 'gender', 'height', 'build', 'age', 'clothing'] as const;
+const ANSWER_KEYS = ['decision', 'section', 'row', 'seat', 'extraSeats', 'groupSeats', 'hub', 'reasons', 'otherReason', 'gender', 'height', 'build', 'age', 'clothing'] as const;
 type Answers = Partial<Pick<Pending, (typeof ANSWER_KEYS)[number]>>;
 
 function snapshot(p: Pending): Answers {
@@ -349,6 +352,7 @@ const PROMPTS: Record<Field, string> = {
   age: `Minor or adult? Reply with a number:\n*1* Adult\n*2* Minor (under 18)${SKIP}`,
   clothing: 'What are they wearing? e.g. *green hat, black jacket*. Reply *-* to skip.',
   confirm: 'Reply *YES* to save it, or *CANCEL*.', // the summary is added in prompt()
+  choose: 'Which seats? Reply with the numbers, e.g. *1 3*, or *ALL*:', // the list is added in prompt()
 };
 
 export class StewardBot {
@@ -357,6 +361,17 @@ export class StewardBot {
   private lastLogs = new Map<string, LastLog>();
   /** A sender's last uncaptioned photo, so "PHOTO 52 YY 14" sent right after it still works. */
   private loosePhotos = new Map<string, { image: { data: Buffer; mime: string }; at: number }>();
+  /** Seats from a SCAN photo, used by a decision ("REFUSED West 1") sent within 5 minutes. */
+  private lastScans = new Map<string, { seats: SeatRef[]; at: number }>();
+  /** Reads seats from a ticket image; defaults to on-device OCR (OCR_ENABLED). */
+  ocr?: (image: Buffer) => Promise<SeatRef[]>;
+
+  private async seatsFromPhoto(image: Buffer, qr: string | null): Promise<SeatRef[]> {
+    const fromQr = qr ? seatsFromText(qr) : [];
+    if (fromQr.length) return fromQr;
+    const ocr = this.ocr ?? (getConfig().OCR_ENABLED ? readSeatsFromImage : undefined);
+    return ocr ? ocr(image) : [];
+  }
 
   /** Optional AI helper (plain-English questions and logs); set when ANTHROPIC_API_KEY is configured. */
   ai?: Pick<AiAgent, 'handle'>;
@@ -385,6 +400,10 @@ export class StewardBot {
 
   /** The question, with the steward's last hub as a hint and how to go back or stop. */
   private prompt(field: Field, p: Pending, senderId: string): string {
+    if (field === 'choose') {
+      const list = (p.choices ?? []).map((c, i) => `*${i + 1}* ${c.section} ${c.row} ${c.seat}`).join('\n');
+      return `${PROMPTS.choose}\n${list}\n_*CANCEL* to stop_`;
+    }
     if (field === 'confirm') return `${draftSummary(p)}\n${PROMPTS.confirm}\n_After saving you can still change it with *EDIT ${p.section} ${p.row} ${p.seat}*._`;
     let text = PROMPTS[field];
     const last = field === 'hub' ? this.rememberedHub(senderId) : undefined;
@@ -451,6 +470,13 @@ export class StewardBot {
     // ---- images: a ticket QR starts (or feeds) a log; another photo is the customer's picture.
     if (m.image) {
       const qr = await decodeQrFromImage(m.image.data);
+      // SCAN: read the seats on a ticket and check them.
+      if (/^(scan|ticket)$/i.test(text)) {
+        const seats = await this.seatsFromPhoto(m.image.data, qr);
+        if (!seats.length) return [{ text: '🎫 I couldn’t read a seat on that ticket. Send it as text instead, e.g. *52 YY 14*.' }];
+        this.lastScans.set(k, { seats, at: this.now() });
+        return [{ text: `${await this.checkSeats(seats)}\n_To log these, send *REFUSED*, *30* or *EJECTED* (with the hub) in the next 5 minutes._` }];
+      }
       const log = parseLogCommand(text) ?? (parseSeatAnswer(text) || (/^(log|new)$/i.test(text) ? {} : null));
       if (!qr && !log && !p) {
         // An ordinary photo: stay quiet, but keep it a few minutes in case "PHOTO <seat>" follows.
@@ -460,10 +486,18 @@ export class StewardBot {
       }
       p = p ?? { startedAt: this.now() };
       if (qr) p.ticketCode = await ticketCodeFromQr(qr);
-      else p.photo = m.image;
       if (log) Object.assign(p, defined(log));
+      let intro = qr ? '🎟️ Ticket QR read.' : '';
+      // No seat yet: it's probably a photo of the ticket, so read the seat from it.
+      const seats = !p.seat && !p.choices && !p.editTicketId ? await this.seatsFromPhoto(m.image.data, qr) : [];
+      if (seats.length) {
+        setSeats(p, seats);
+        intro = [intro, seats.length === 1 ? `🎫 Seat from the ticket: *${seats[0].section} ${seats[0].row} ${seats[0].seat}*.` : '🎫 The ticket shows several seats.'].filter(Boolean).join(' ');
+      } else if (!qr) {
+        p.photo = m.image; // the customer's picture
+        intro = '📷 Photo saved.';
+      }
       this.pending.set(k, p);
-      const intro = qr ? '🎟️ Ticket QR read.' : '📷 Photo saved.';
       return this.advance(m, p, intro);
     }
 
@@ -472,6 +506,11 @@ export class StewardBot {
     // "refused drunk lad in a green hat at West, seat 313 YY 56": plain English, let the AI read it.
     if (log && this.ai && !log.section && (log.clothing ?? '').split(/\s+/).length >= 3) return this.askAi(m, text, k);
     if (log) {
+      const scan = this.lastScans.get(k);
+      if (!log.section && scan && this.now() - scan.at < 5 * 60_000) {
+        this.lastScans.delete(k);
+        setSeats(log, scan.seats, true);
+      }
       p = { ...(p ?? {}), ...defined(log), startedAt: p?.startedAt ?? this.now() };
       this.pending.set(k, p);
       return this.advance(m, p);
@@ -512,7 +551,7 @@ export class StewardBot {
 
     // ---- several seats at once: "300 L 205 206 207"
     const many = parseSeatAnswer(text);
-    if (many?.extraSeats) return [{ text: await this.checkMany(many.section!, many.row!, [many.seat!, ...many.extraSeats]) }];
+    if (many?.extraSeats) return [{ text: await this.checkSeats([many.seat!, ...many.extraSeats].map((seat) => ({ section: many.section!, row: many.row!, seat }))) }];
 
     // ---- part of a seat: "313 L" (section and row), "313" or "SECTION 313"
     const partial = parsePartialSeat(text);
@@ -536,6 +575,19 @@ export class StewardBot {
   private applyAnswer(p: Pending, text: string): boolean {
     const asked = p.asked;
     if (!text) return false;
+    if (asked === 'choose') {
+      const choices = p.choices ?? [];
+      let picked: SeatRef[] = [];
+      if (/^(all|every|\*)$/i.test(text)) picked = choices;
+      else {
+        const nums = text.split(/[\s,&]+|\band\b/i).filter(Boolean);
+        if (!nums.length || !nums.every((n) => /^\d+$/.test(n) && Number(n) >= 1 && Number(n) <= choices.length)) return false;
+        picked = [...new Set(nums.map(Number))].map((n) => choices[n - 1]);
+      }
+      if (!picked.length) return false;
+      setSeats(p, picked, true);
+      return true;
+    }
     if (asked === 'decision' || (!asked && !p.decision)) {
       if (/^3$/.test(text) || /^eject(ed)?$/i.test(text)) return (p.decision = 'refused'), (p.ejected = true), true;
       const d = /^1$/.test(text) ? 'refused' : /^2$/.test(text) ? 'cool_off' : parseDecision(text);
@@ -583,6 +635,7 @@ export class StewardBot {
       return null;
     }
     if (!p.decision) return 'decision';
+    if (!p.seat && p.choices?.length) return 'choose';
     if (!p.seat) return 'seat';
     if (!p.hub) return 'hub';
     if (!p.reasons?.length) return 'reasons';
@@ -610,16 +663,16 @@ export class StewardBot {
   /** Once per log, as soon as the seat is known: warn if that seat is already refused or sent away. */
   private async alreadyOnRecord(p: Pending): Promise<string | null> {
     if (p.editTicketId || !p.seat) return null;
-    const seats = [p.seat, ...(p.extraSeats ?? [])];
-    const label = `${p.section} ${p.row} ${seats.join(',')}`;
+    const seats = seatList(p);
+    const label = seatsLabel(seats);
     if (p.seatLookedUp === label) return null;
     p.seatLookedUp = label;
     try {
       const found: string[] = [];
-      for (const seat of seats) {
-        const prof = await getTicketProfileBySeat(p.section!, p.row!, seat);
+      for (const s of seats) {
+        const prof = await getTicketProfileBySeat(s.section, s.row, s.seat);
         if (prof && prof.current_status !== 'admitted') {
-          found.push(formatQuickCheck(prof, { section: p.section, row: p.row, seat }).split('\n').slice(0, seats.length > 1 ? 1 : 2).join('\n'));
+          found.push(formatQuickCheck(prof, s).split('\n').slice(0, seats.length > 1 ? 1 : 2).join('\n'));
         }
       }
       if (!found.length) return null;
@@ -648,7 +701,7 @@ export class StewardBot {
   }
 
   private async commit(m: InboundMessage, p: Pending): Promise<string> {
-    if (p.extraSeats?.length) return this.commitGroup(m, p);
+    if (p.extraSeats?.length || (p.groupSeats?.length ?? 0) > 1) return this.commitGroup(m, p);
     const hub = p.hub!;
     this.hubs.set(m.senderId, { hub, at: this.now() });
     const at = m.at ?? new Date(this.now());
@@ -703,17 +756,18 @@ export class StewardBot {
     const hub = p.hub!;
     this.hubs.set(m.senderId, { hub, at: this.now() });
     const at = (m.at ?? new Date(this.now())).toISOString();
-    const seats = [p.seat!, ...(p.extraSeats ?? [])];
+    const seats = seatList(p);
     const party = Math.max(p.party ?? 1, seats.length);
     const created: string[] = [];
     const hops: string[] = [];
     const failed: string[] = [];
     let offline = false;
-    for (const [i, seat] of seats.entries()) {
+    for (const [i, s] of seats.entries()) {
+      const seat = s.seat;
       const parsed = scanInputSchema.safeParse({
         ticket_id: i === 0 ? p.ticketCode : undefined, // a scanned QR belongs to the first seat
-        section: p.section,
-        row: p.row,
+        section: s.section,
+        row: s.row,
         seat,
         hub_location: hub,
         steward_name: (m.senderName || 'Steward').slice(0, 100),
@@ -724,7 +778,7 @@ export class StewardBot {
         occurred_at: at,
       });
       if (!parsed.success) {
-        failed.push(seat);
+        failed.push(`${s.section} ${s.row} ${seat}`);
         continue;
       }
       try {
@@ -739,7 +793,7 @@ export class StewardBot {
         if (o.scenario === 'HUB_HOP_BYPASS') {
           const origin = o.originEvent;
           hops.push(
-            `🚨 *${p.section} ${p.row} ${seat}* was already ${t.current_status === 'cooling_off' ? 'SENT AWAY' : 'REFUSED'}` +
+            `🚨 *${s.section} ${s.row} ${seat}* was already ${t.current_status === 'cooling_off' ? 'SENT AWAY' : 'REFUSED'}` +
               ` at ${origin?.hub_location ?? 'another hub'}${origin ? ` ${formatClock(origin.timestamp)}` : ''}. ⛔ Do not admit.`,
           );
         }
@@ -749,13 +803,13 @@ export class StewardBot {
           offline = true;
         } else {
           console.error('[steward-bot] save failed:', err);
-          failed.push(seat);
+          failed.push(`${s.section} ${s.row} ${seat}`);
         }
       }
     }
     if (created.length) this.lastLogs.set(m.senderId, { ticketIds: created, createdTicket: true, at: this.now() });
 
-    const label = `${p.section} ${p.row} ${seats.join(', ')}`;
+    const label = seatsLabel(seats);
     const when = formatClock(new Date(this.now()));
     const head =
       p.decision === 'cool_off'
@@ -863,11 +917,11 @@ export class StewardBot {
     }
   }
 
-  private async checkMany(section: string, row: string, seats: string[]): Promise<string> {
+  private async checkSeats(seats: SeatRef[]): Promise<string> {
     try {
       const now = new Date(this.now());
       const lines = await Promise.all(
-        seats.map(async (seat) => {
+        seats.map(async ({ section, row, seat }) => {
           const prof = await getTicketProfileBySeat(section, row, seat);
           const label = `*${section} ${row} ${seat}*`;
           if (!prof) return `✅ ${label} · not refused`;
@@ -884,7 +938,7 @@ export class StewardBot {
           return prof.current_status === 'admitted' ? status : status + reason;
         }),
       );
-      return `🔎 ${section} ${row} ${seats.join(', ')}:\n${lines.join('\n')}\n_Send one seat for full details and the photo._`;
+      return `🔎 ${seatsLabel(seats)}:\n${lines.join('\n')}\n_Send one seat for full details and the photo._`;
     } catch (err) {
       console.error('[steward-bot] lookup failed:', (err as Error).message);
       return '⚠️ Gatekeeper can’t reach its database right now. Treat these seats as *unchecked* and ask a supervisor.';
@@ -1103,10 +1157,40 @@ export function parsePartialSeat(text: string): { section: string; row?: string;
   return null;
 }
 
+/** All seats of a log: one, a row list ("205 206 207"), or seats across rows from a ticket. */
+function seatList(p: Pending): SeatRef[] {
+  if (p.groupSeats?.length) return p.groupSeats;
+  return [p.seat!, ...(p.extraSeats ?? [])].map((seat) => ({ section: p.section!, row: p.row!, seat }));
+}
+
+/** "313 YY 56, 57 · 313 ZZ 10". */
+function seatsLabel(seats: SeatRef[]): string {
+  const groups = new Map<string, string[]>();
+  for (const s of seats) groups.set(`${s.section} ${s.row}`, [...(groups.get(`${s.section} ${s.row}`) ?? []), s.seat]);
+  return [...groups.entries()].map(([sr, list]) => `${sr} ${list.join(', ')}`).join(' · ');
+}
+
+/** Puts chosen seats on a log; several seats become a group (or a choice to make first). */
+function setSeats(p: ParsedLog & { choices?: SeatRef[]; groupSeats?: SeatRef[] }, seats: SeatRef[], chosen = false): void {
+  if (seats.length > 1 && !chosen) {
+    p.choices = seats;
+    return;
+  }
+  const [first] = seats;
+  Object.assign(p, { section: first.section, row: first.row, seat: first.seat });
+  delete p.extraSeats;
+  delete p.groupSeats;
+  if (seats.length > 1) {
+    const sameRow = seats.every((s) => s.section === first.section && s.row === first.row);
+    if (sameRow) p.extraSeats = seats.slice(1).map((s) => s.seat);
+    else p.groupSeats = seats;
+  }
+}
+
 /** What an AI draft will save, for the steward to confirm. */
 function draftSummary(p: Pending): string {
   const head = p.decision === 'cool_off' ? '🟠 *SENT AWAY 30 MIN*' : p.ejected ? '⛔ *EJECTED*' : '🔴 *REFUSED*';
-  const lines = [`*Check this before I save it:*`, `${head} · ${p.section} ${p.row} ${[p.seat, ...(p.extraSeats ?? [])].join(', ')} · ${p.hub ?? '?'}`];
+  const lines = [`*Check this before I save it:*`, `${head} · ${seatsLabel(seatList(p))} · ${p.hub ?? '?'}`];
   const reason = reasonText(p);
   if (reason) lines.push(`📝 ${sanitize(reason, 200)}`);
   const desc = describe(p);
@@ -1196,6 +1280,7 @@ export const STEWARD_HELP =
   '*Log someone:* *REFUSED 52 YY 14 West*, *30 52 YY 14 West* (sent away 30 min) or *EJECTED 52 YY 14 West*; ' +
   'or a photo of them or their ticket QR with the seat as the caption; or just *LOG*. Add *x3* for a group of 3.\n' +
   '*Several seats:* *REFUSED 300 L 205 206 207 West* (or *205-207*): one record each, same answers. *300 L 205 206 207* checks them all.\n' +
+  '*Ticket photo:* send it captioned *REFUSED* / *30* / *EJECTED* and I read the seat (several seats: pick with *1 3* or *ALL*). Caption *SCAN* just checks them.\n' +
   'I’ll then ask: hub, reasons, male/female, height, build, minor or adult, and what they’re wearing.\n' +
   '*BACK*: change your last answer · *CANCEL*: stop · *UNDO*: remove your last saved record (15 min)\n' +
   `*Reasons* (one or more, e.g. *1 3 5*): ${REASONS.map((r, i) => `${i + 1} ${r}`).join(' · ')}\n\n` +

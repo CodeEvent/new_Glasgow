@@ -73,6 +73,8 @@ const envObject = z.object({
   AI_MODEL: optionalText,
   // Most AI messages per day for everyone together (keeps the bill predictable).
   AI_DAILY_LIMIT: z.coerce.number().int().min(0).default(200),
+  // Read section/row/seat from ticket photos on this device (Tesseract). "off" to disable.
+  OCR_ENABLED: onByDefault,
   // End-of-night summary posted to the groups at this time (HH:MM, TZ_DISPLAY), or "off".
   SUMMARY_TIME: z
     .string()

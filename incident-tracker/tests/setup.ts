@@ -7,3 +7,6 @@ process.env.WHATSAPP_GROUP_ID ??= 'GROUP-SUPERVISORS';
 process.env.WHATSAPP_VERIFY_TOKEN ??= 'verify-me';
 process.env.TZ_DISPLAY ??= 'UTC';
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL ?? 'postgres://postgres@localhost:5432/gatekeeper_test';
+
+// Bot tests inject their own OCR; never start the real engine by accident.
+process.env.OCR_ENABLED ??= 'false';
