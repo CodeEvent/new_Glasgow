@@ -1,7 +1,7 @@
 import { getConfig } from '../config/env';
 import { getPool, isConnectivityError } from '../db/pool';
 import { listRecords, recordsToCsv, type RecordRow } from './adminRecords';
-import { formatClock, sanitize } from './format';
+import { formatClock, minutesUntil, sanitize } from './format';
 
 /**
  * Tonight's numbers (STATS / end-of-night summary) and the background jobs that post
@@ -59,6 +59,70 @@ export function statsText(rows: RecordRow[], now: Date, title = '📊 *TONIGHT S
 
 export async function currentStats(now = new Date()): Promise<string> {
   return statsText(await listRecords({}, 10_000), now);
+}
+
+// ---------------------------------------------------------------- BRIEF
+
+/**
+ * BRIEF: what a steward starting a shift needs, in one short message: tonight's numbers, who may
+ * be back in the next 30 minutes, who to watch for (ejected, or tried to get back in), the busy
+ * hubs and reasons, their own hub, and the first line of the policy.
+ */
+export function briefText(rows: RecordRow[], now: Date, opts: { hub?: string; policy?: string }): string {
+  const lines = [`📋 *SHIFT BRIEF* · ${formatClock(now)}`];
+  if (!rows.length) {
+    lines.push('Nothing logged yet tonight. Quiet so far.');
+  } else {
+    const isEjected = (r: RecordRow) => r.current_status === 'completely_refused' && /^Ejected/.test(r.reasoning);
+    const ejected = rows.filter(isEjected).length;
+    const refused = rows.filter((r) => r.current_status === 'completely_refused').length - ejected;
+    const away = rows.filter((r) => r.current_status === 'cooling_off' && r.cool_down_until && new Date(r.cool_down_until) > now);
+    lines.push(`🔴 ${refused} refused${ejected ? ` · ⛔ ${ejected} ejected` : ''} · 🟠 ${away.length} sent away now`);
+
+    const MAX = 5;
+    const more = (list: unknown[]) => (list.length > MAX ? `\n_…and ${list.length - MAX} more: send *LIST*_` : '');
+    const who = (r: RecordRow) => (r.description && r.description !== 'Not provided' ? `\n   👤 ${sanitize(r.description, 70)}` : '');
+
+    const soon = away
+      .filter((r) => new Date(r.cool_down_until!).getTime() <= now.getTime() + 30 * 60_000)
+      .sort((a, b) => new Date(a.cool_down_until!).getTime() - new Date(b.cool_down_until!).getTime());
+    if (soon.length) {
+      lines.push(
+        '',
+        `🟡 *Back soon* (next 30 min)\n` +
+          soon.slice(0, MAX).map((r) => `• *${sanitize(seatOf(r), 40)}* · back ${formatClock(r.cool_down_until!)} (${minutesUntil(r.cool_down_until!, now)} min)${who(r)}`).join('\n') +
+          more(soon),
+      );
+    }
+
+    const watch = rows
+      .filter((r) => r.current_status !== 'admitted' && (isEjected(r) || r.breaches > 0 || /tried re-entry/.test(r.reasoning)))
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    if (watch.length) {
+      const why = (r: RecordRow) => (isEjected(r) ? '⛔ ejected' : '🚨 tried to get back in');
+      const hub = (r: RecordRow) => (r.origin_hub ? ` · ${r.origin_hub.replace(' Hub', '')}` : '');
+      lines.push(
+        '',
+        `🚨 *Watch for*\n` + watch.slice(0, MAX).map((r) => `• *${sanitize(seatOf(r), 40)}* · ${why(r)}${hub(r)}${who(r)}`).join('\n') + more(watch),
+      );
+    }
+
+    const top = (tallied: string) => tallied.split(' · ').slice(0, 3).join(' · ');
+    const hubs = top(tally(rows.map((r) => r.origin_hub?.replace(' Hub', '') ?? '').filter(Boolean)));
+    const reasons = top(tally(rows.flatMap((r) => reasonsOf(r.reasoning))));
+    lines.push('');
+    if (hubs) lines.push(`🔥 *Busiest hubs:* ${hubs}`);
+    if (reasons) lines.push(`*Top reasons:* ${reasons}`);
+    if (opts.hub) {
+      const mine = rows.filter((r) => r.origin_hub === opts.hub);
+      const last = mine.map((r) => r.origin_at).filter((d): d is Date => !!d).sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0];
+      lines.push(`🏟️ *${opts.hub.replace(' Hub', '')} tonight:* ${mine.length} logged${last ? `, last ${formatClock(last)}` : ''}`);
+    }
+  }
+  const policy = opts.policy?.split('\n').find((l) => l.trim());
+  if (policy) lines.push(`📋 *Policy:* ${sanitize(policy.trim(), 200)}`);
+  lines.push('', '_*LIST*: everyone · *FIND green hat*: search · send a seat for details_');
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n');
 }
 
 // ---------------------------------------------------------------- readmit reminders

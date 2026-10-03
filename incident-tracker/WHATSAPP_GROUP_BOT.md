@@ -14,6 +14,7 @@ Stewards log and check refused patrons entirely inside your **work WhatsApp grou
 | a reason, height or build that isn't on the list (e.g. `trespassing`, `muscular`) | accepted, and **remembered in the background** so it's recognised next time (also inside a one-line answer). The numbered lists never change and nothing extra is shown. Words that mean an existing option are mapped to it (`drunk` → Intoxicated, `very tall` → Tall). Never duplicated. The AI's descriptions are learnt the same way. |
 | `OPTIONS` · `OPTIONS REMOVE trespassing` | list the learnt words · forget one, e.g. a typo (group admins) |
 | `STATS` | tonight's numbers: refused, ejected, sent away, cleared, hub-hops, by reason, by hub, minors, people in groups |
+| `BRIEF` | start-of-shift catch-up in one message: tonight's numbers, who may be back in the next 30 min, who to watch for (ejected or tried to get back in, with descriptions), the busiest hubs and top reasons, your own hub (from `HUB WEST`), and the first line of the policy |
 | `313 L` or `234 O` (section and row), `313` or `SECTION 313` (whole section) | 🔎 everyone on record there, in seat order. A bare number only gets a reply if something is on record, so normal chat like "10" is ignored. |
 | `FIND green hat` | searches tonight's descriptions, reasons and notes; for when you see someone but don't know their seat |
 | `NOTE 52 YY 14 came back calm` | 🗒️ adds a note to a saved record; checks show the latest notes |
@@ -28,7 +29,7 @@ Stewards log and check refused patrons entirely inside your **work WhatsApp grou
 | a photo captioned `PHOTO 52 YY 14` | 📷 adds the photo to an already saved record |
 | `REPORT` (**group admins only**, in a **private chat** with the bot) | the spreadsheet (CSV) of everything on record |
 
-**Supervisors = WhatsApp admins of the work group.** Make a supervisor a group admin (Group info → tap them → Make group admin) and they can use `CLEAR` and `REPORT`. Everyone else can log, check, `LIST` and `STATS`.
+**Supervisors = WhatsApp admins of the work group.** Make a supervisor a group admin (Group info → tap them → Make group admin) and they can use `CLEAR` and `REPORT`. Everyone else can log, check, `LIST`, `STATS` and `BRIEF`.
 
 **The bot also posts on its own** (each can be switched off, see Settings):
 - 🚨 **Hub-hop alert**: when someone already refused or sent away tries another hub, the alert goes to every selected group (and to the group if the log came from a private chat).

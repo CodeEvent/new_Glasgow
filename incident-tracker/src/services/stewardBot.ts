@@ -3,7 +3,7 @@ import { getPool, isConnectivityError } from '../db/pool';
 import { addNote, getNotes, listRecords, recordsToCsv, updateRecord, type RecordRow } from './adminRecords';
 import type { AiContext, AiHelper, AiResult } from './aiAgent';
 import { getSetting, setSetting } from '../channels/pgAuthState';
-import { currentStats } from './nightReport';
+import { briefText, currentStats } from './nightReport';
 import { HUBS, type Hub } from '../domain';
 import { parseGroupMessage } from './commandParser';
 import { formatClock, minutesUntil, sanitize } from './format';
@@ -26,7 +26,7 @@ import { getTicketProfile, getTicketProfileBySeat } from './ticketLookup';
  *         then male/female, height, build, minor/adult and clothing.
  *         The time is the message time. The hub is asked every time (last one shown as a hint).
  *  Check: "BB 212 100" -> refused / sent away / not on record, with the photo if there is one.
- *  Also:  LIST (everyone refused or sent away now), BACK (reopen the previous question), UNDO (remove your last new record),
+ *  Also:  LIST (everyone refused or sent away now), BRIEF (shift handover), BACK (reopen the previous question), UNDO (remove your last new record),
  *         CANCEL (drop a half-finished log), HELP.
  */
 
@@ -491,6 +491,7 @@ export class StewardBot {
     if (adviceCmd) return [{ text: await this.advice(m, adviceCmd[1].trim()) }];
     if (/^list$/i.test(text)) return [{ text: await this.list() }];
     if (/^stats$/i.test(text)) return [{ text: await this.stats() }];
+    if (/^brief$/i.test(text)) return [{ text: await this.brief(m) }];
     if (/^report$/i.test(text)) return [await this.report(m)];
     const find = /^(?:find|search)\s+(.+)$/i.exec(text);
     if (find && !m.image) return [{ text: await this.find(find[1]) }];
@@ -1239,6 +1240,18 @@ export class StewardBot {
 
   // ---------------------------------------------------------------- STATS, REPORT, CLEAR, PHOTO
 
+  /** BRIEF: a short handover for a steward starting their shift. */
+  private async brief(m: InboundMessage): Promise<string> {
+    try {
+      const [rows, policy] = await Promise.all([listRecords({}, 10_000), this.policy()]);
+      const hub = this.shiftHub(m.senderId) ?? this.rememberedHub(m.senderId);
+      return briefText(rows, new Date(this.now()), { hub, policy: policy?.text });
+    } catch (err) {
+      console.error('[steward-bot] brief failed:', (err as Error).message);
+      return '⚠️ Gatekeeper can’t reach its database right now. Try again in a minute.';
+    }
+  }
+
   private async stats(): Promise<string> {
     try {
       return await currentStats(new Date(this.now()));
@@ -1545,7 +1558,7 @@ export const STEWARD_HELP =
   'Not on the list? Type it in a few words: it’s accepted, and recognised next time.\n\n' +
   '*Check:* send the seat, e.g. *52 YY 14* · *313 L*: everyone in section 313 row L · *313*: the whole section\n' +
   '*FIND green hat*: search descriptions\n' +
-  '*LIST*: who is refused or sent away now · *STATS*: tonight’s numbers\n\n' +
+  '*LIST*: who is refused or sent away now · *STATS*: tonight’s numbers · *BRIEF*: catch up at the start of your shift\n\n' +
   '*Add to a saved record:* *NOTE 52 YY 14 came back calm* · *PARTY 52 YY 14 3* · ' +
   'a photo captioned *PHOTO 52 YY 14* · *EDIT 52 YY 14* (your own log; admins: any)\n' +
   '_Group admins only:_ *CLEAR 52 YY 14* (may enter now) · *REPORT* in a private chat (the spreadsheet)\n\n' +
