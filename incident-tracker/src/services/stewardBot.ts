@@ -1,7 +1,8 @@
 import { getConfig } from '../config/env';
 import { getPool, isConnectivityError } from '../db/pool';
 import { addNote, getNotes, listRecords, recordsToCsv, updateRecord, type RecordRow } from './adminRecords';
-import type { AiAgent } from './aiAgent';
+import type { AiContext, AiHelper, AiResult } from './aiAgent';
+import { getSetting, setSetting } from '../channels/pgAuthState';
 import { currentStats } from './nightReport';
 import { HUBS, type Hub } from '../domain';
 import { parseGroupMessage } from './commandParser';
@@ -37,6 +38,7 @@ export interface InboundMessage {
   image?: { data: Buffer; mime: string } | null;
   at?: Date; // when it was sent
   mentionsBot?: boolean; // the bot was @mentioned (group chats)
+  audio?: { data: Buffer; mime: string } | null; // a voice note
 }
 
 export interface OutboundReply {
@@ -295,7 +297,7 @@ export function takeExtraSeats(first: string, text: string, bare: boolean): { se
 
 // ---------------------------------------------------------------- conversation state
 
-type Field = 'decision' | 'choose' | 'seat' | 'hub' | 'reasons' | 'other' | 'gender' | 'height' | 'build' | 'age' | 'clothing' | 'confirm';
+type Field = 'decision' | 'choose' | 'seat' | 'hub' | 'reasons' | 'other' | 'describe' | 'gender' | 'height' | 'build' | 'age' | 'clothing' | 'confirm';
 
 interface Pending extends ParsedLog {
   editTicketId?: string; // EDIT: re-asking the details of a saved record
@@ -304,6 +306,8 @@ interface Pending extends ParsedLog {
   aiDraft?: boolean; // filled in by the AI helper: the steward must confirm before saving
   confirmed?: boolean;
   seatLookedUp?: string; // seat already checked against existing records (warned once)
+  describeFallback?: boolean; // the AI couldn't read the description: ask the numbered questions
+  reentry?: boolean; // the seat is already refused or sent away: this is a re-entry attempt
   otherReason?: string; // what happened, when "Other" is one of the reasons ('' = skipped)
   ticketCode?: string;
   photo?: { data: Buffer; mime: string };
@@ -353,6 +357,8 @@ const PROMPTS: Record<Field, string> = {
   clothing: 'What are they wearing? e.g. *green hat, black jacket*. Reply *-* to skip.',
   confirm: 'Reply *YES* to save it, or *CANCEL*.', // the summary is added in prompt()
   choose: 'Which seats? Reply with the numbers, e.g. *1 3*, or *ALL*:', // the list is added in prompt()
+  describe:
+    'Describe them in your own words: male/female, height, build, age, clothing.\ne.g. *tall heavy lad about 20, green hat, black jacket*\n_(*-* to skip)_',
 };
 
 export class StewardBot {
@@ -374,7 +380,14 @@ export class StewardBot {
   }
 
   /** Optional AI helper (plain-English questions and logs); set when ANTHROPIC_API_KEY is configured. */
-  ai?: Pick<AiAgent, 'handle'>;
+  ai?: AiHelper;
+  /** Hub for the whole shift ("HUB WEST"), per steward, for 12 hours. */
+  private shiftHubs = new Map<string, { hub: Hub; at: number }>();
+
+  private shiftHub(senderId: string): Hub | undefined {
+    const h = this.shiftHubs.get(senderId);
+    return h && this.now() - h.at < HUB_MEMORY_MS ? h.hub : undefined;
+  }
 
   /** Posts to the selected groups except `exceptChatId` (set by the WhatsApp channel). */
   announce?: (text: string, exceptChatId?: string) => void;
@@ -406,8 +419,11 @@ export class StewardBot {
     }
     if (field === 'confirm') return `${draftSummary(p)}\n${PROMPTS.confirm}\n_After saving you can still change it with *EDIT ${p.section} ${p.row} ${p.seat}*._`;
     let text = PROMPTS[field];
-    const last = field === 'hub' ? this.rememberedHub(senderId) : undefined;
-    if (last) text += `\n_Last time: *${last.replace(' Hub', '')}* (reply *${HUBS.indexOf(last) + 1}*)_`;
+    if (field === 'hub' && p.reentry) text = text.replace('Which hub are you at?', '🚨 Which hub are they trying to get in at?');
+    const shift = field === 'hub' ? this.shiftHub(senderId) : undefined;
+    const last = field === 'hub' && !shift ? this.rememberedHub(senderId) : undefined;
+    if (shift) text += `\n_Your shift hub: *${shift.replace(' Hub', '')}* (reply *${HUBS.indexOf(shift) + 1}*)_`;
+    else if (last) text += `\n_Last time: *${last.replace(' Hub', '')}* (reply *${HUBS.indexOf(last) + 1}*)_`;
     const canGoBack = (p.history?.length ?? 0) > 1 || (p.history?.length === 1 && p.history[0].field !== field);
     return `${text}\n_${canGoBack ? '*BACK* to change your last answer · ' : ''}*CANCEL* to stop_`;
   }
@@ -444,6 +460,18 @@ export class StewardBot {
     if (/^(back|prev|previous)$/i.test(text)) return p ? [{ text: this.back(p, m.senderId) }] : [];
     if (/^undo$/i.test(text)) return [{ text: await this.undo(m.senderId) }];
     if (/^(help|\?|menu)$/i.test(text)) return [{ text: STEWARD_HELP + (this.ai ? AI_HELP : '') }];
+    // ---- voice notes: private chats only (in a group they could be anyone's chat)
+    if (m.audio) {
+      if (m.chatId.endsWith('@g.us')) return [];
+      if (!this.ai?.handleAudio) return [{ text: '🎙️ Voice notes need the Gemini AI helper. Type it instead, or ask the organiser to set it up.' }];
+      return this.fromAi(m, k, await this.ai.handleAudio(m.audio.data, m.audio.mime, m.senderId));
+    }
+    const hubCmd = /^hub(?:\s+(.+))?$/i.exec(text);
+    if (hubCmd) return this.hubCommand(m, k, hubCmd[1]?.trim());
+    const policyCmd = /^policy(?:\s+([\s\S]+))?$/i.exec(text);
+    if (policyCmd) return [{ text: await this.policyCommand(m, policyCmd[1]?.trim()) }];
+    const adviceCmd = /^(?:(?:gk|gatekeeper|ai)\b[\s,:;-]*)?advice\b[\s,:;-]*([\s\S]*)$/i.exec(text);
+    if (adviceCmd) return [{ text: await this.advice(m, adviceCmd[1].trim()) }];
     if (/^list$/i.test(text)) return [{ text: await this.list() }];
     if (/^stats$/i.test(text)) return [{ text: await this.stats() }];
     if (/^report$/i.test(text)) return [await this.report(m)];
@@ -478,6 +506,16 @@ export class StewardBot {
         return [{ text: `${await this.checkSeats(seats)}\n_To log these, send *REFUSED*, *30* or *EJECTED* (with the hub) in the next 5 minutes._` }];
       }
       const log = parseLogCommand(text) ?? (parseSeatAnswer(text) || (/^(log|new)$/i.test(text) ? {} : null));
+      // A ticket photo with a few words ("drunk, swearing, green hat, West"): the seat is read on the
+      // phone, only the words go to the AI. In a group, only when the photo really shows a seat.
+      const words = text.split(/\s+/).filter(Boolean).length;
+      const plainEnglish = !log || (!log.section && ((log as ParsedLog).clothing ?? '').split(/\s+/).length >= 3);
+      if (this.ai && !p && words >= 3 && plainEnglish) {
+        const seats = await this.seatsFromPhoto(m.image.data, qr);
+        if (seats.length || !m.chatId.endsWith('@g.us')) {
+          return this.fromAi(m, k, await this.ai.handle(text, m.senderId, { seats }), seats, text);
+        }
+      }
       if (!qr && !log && !p) {
         // An ordinary photo: stay quiet, but keep it a few minutes in case "PHOTO <seat>" follows.
         for (const [key, v] of this.loosePhotos) if (this.now() - v.at > 5 * 60_000) this.loosePhotos.delete(key);
@@ -536,6 +574,10 @@ export class StewardBot {
           const still = `_You’re still logging ${p.section} ${p.row} ${p.seat}. Answer the question below, or send CANCEL._\n${this.prompt(p.asked ?? this.nextMissing(p) ?? 'reasons', p, m.senderId)}`;
           return [check, { text: still }];
         }
+      }
+      if (p.asked === 'describe') {
+        await this.answerDescribe(p, text, m.senderId);
+        return this.advance(m, p);
       }
       const answered = this.applyAnswer(p, text);
       if (answered) return this.advance(m, p);
@@ -640,19 +682,24 @@ export class StewardBot {
     if (!p.hub) return 'hub';
     if (!p.reasons?.length) return 'reasons';
     if (p.reasons.includes('Other') && p.otherReason === undefined) return 'other';
+    // With the AI on, one free-text question replaces the five numbered ones.
+    if (this.ai?.describe && !p.describeFallback && DESCRIPTION_FIELDS.every((f) => p[f] === undefined)) return 'describe';
     for (const f of DESCRIPTION_FIELDS) if (p[f] === undefined) return f;
     if (p.aiDraft && !p.confirmed) return 'confirm';
     return null;
   }
 
   private async advance(m: InboundMessage, p: Pending, intro?: string): Promise<OutboundReply[]> {
+    // Look the seat up first: someone already refused or sent away is trying to get back in.
+    const warning = await this.alreadyOnRecord(p);
+    // "HUB WEST" for the shift, but for a re-entry ask where they're trying now.
+    if (!p.hub && !p.editTicketId && !p.reentry) p.hub = this.shiftHub(m.senderId);
     const missing = this.nextMissing(p);
     if (missing) {
       p.asked = missing;
       p.history ??= [];
       if (p.history[p.history.length - 1]?.field !== missing) p.history.push({ field: missing, before: snapshot(p) });
       const q = this.prompt(missing, p, m.senderId);
-      const warning = await this.alreadyOnRecord(p);
       const ask = intro ? `${intro} ${q}` : q;
       return [{ text: warning ? `${warning}\n${ask}` : ask }];
     }
@@ -672,6 +719,7 @@ export class StewardBot {
       for (const s of seats) {
         const prof = await getTicketProfileBySeat(s.section, s.row, s.seat);
         if (prof && prof.current_status !== 'admitted') {
+          p.reentry = true;
           found.push(formatQuickCheck(prof, s).split('\n').slice(0, seats.length > 1 ? 1 : 2).join('\n'));
         }
       }
@@ -743,6 +791,9 @@ export class StewardBot {
     if (outcome.scenario === 'NEW_INCIDENT' && !outcome.previousStatus) {
       this.lastLogs.set(m.senderId, { ticketIds: [ticket.ticket_id], createdTicket: true, at: this.now() });
     }
+    if (outcome.previousStatus && outcome.previousStatus !== 'admitted') {
+      ticket.reasoning = await addReentryReason(ticket.ticket_id, ticket.reasoning, outcome.previousStatus, reasonText(p));
+    }
     const reply = confirmation(outcome, hub, p);
     if (outcome.scenario === 'HUB_HOP_BYPASS' && getConfig().WA_HUBHOP_ALERTS) {
       // The steward who logged it sees the reply; everyone else in the other chats gets the alert.
@@ -784,6 +835,9 @@ export class StewardBot {
       try {
         const o = await processScan(parsed.data);
         const t = o.ticket!;
+        if (o.previousStatus && o.previousStatus !== 'admitted') {
+          t.reasoning = await addReentryReason(t.ticket_id, t.reasoning, o.previousStatus, reasonText(p));
+        }
         if (o.scenario === 'NEW_INCIDENT' && !o.previousStatus) created.push(t.ticket_id);
         if (p.photo) {
           await getPool()
@@ -844,7 +898,15 @@ export class StewardBot {
   // ---------------------------------------------------------------- AI helper
 
   private async askAi(m: InboundMessage, text: string, k: string): Promise<OutboundReply[]> {
-    const res = await this.ai!.handle(text, m.senderId);
+    return this.fromAi(m, k, await this.ai!.handle(text, m.senderId), undefined, text);
+  }
+
+  /**
+   * Turns an AI result into a reply; a draft becomes a log to confirm. `seats` read from a
+   * ticket photo win over anything the AI says about seats. `said` is the steward's own words,
+   * used for a policy suggestion when they didn't say refused or sent away.
+   */
+  private async fromAi(m: InboundMessage, k: string, res: AiResult, seats?: AiContext['seats'], said?: string): Promise<OutboundReply[]> {
     if (res.kind !== 'draft') return [{ text: res.kind === 'answer' ? `🤖 ${res.text}` : res.text }];
     const d = res.draft;
     const p: Pending = {
@@ -866,8 +928,102 @@ export class StewardBot {
       age: d.age ?? '',
       clothing: d.clothing ?? '',
     };
+    // The decision is the steward's: keep the AI's only if their own words say it.
+    if (said && !DECISION_WORDS.test(said)) {
+      delete p.decision;
+      delete p.ejected;
+    }
+    const intro: string[] = [];
+    if (seats?.length) {
+      setSeats(p, seats);
+      intro.push(seats.length === 1 ? `🎫 Seat from the ticket: *${seats[0].section} ${seats[0].row} ${seats[0].seat}*.` : '🎫 The ticket shows several seats.');
+    }
+    intro.push('🤖 Got it.');
+    if (!p.decision && said && this.ai?.advise) {
+      const policy = await this.policy();
+      if (policy) {
+        const adv = await this.ai.advise(said, policy.text, m.senderId);
+        if (adv.kind === 'answer') intro.push(`\n🤖 Policy suggests: ${adv.text}\n_You decide._\n`);
+      }
+    }
     this.pending.set(k, p);
-    return this.advance(m, p, '🤖 Got it.');
+    return this.advance(m, p, intro.join(' '));
+  }
+
+  // ---------------------------------------------------------------- HUB, describe, POLICY, ADVICE
+
+  private async hubCommand(m: InboundMessage, k: string, arg?: string): Promise<OutboundReply[]> {
+    if (!arg) {
+      const h = this.shiftHub(m.senderId);
+      return [{ text: h ? `🏟️ Your hub this shift: *${h}*. *HUB OFF* to stop.` : 'No hub set for your shift. Send e.g. *HUB WEST* and I won’t ask again for 12 hours.' }];
+    }
+    if (/^(off|clear|none|stop)$/i.test(arg)) {
+      this.shiftHubs.delete(m.senderId);
+      return [{ text: '🏟️ Shift hub cleared. I’ll ask which hub each time.' }];
+    }
+    const n = /^([1-4])$/.exec(arg);
+    const hub = n ? HUBS[Number(n[1]) - 1] : parseHub(arg);
+    if (!hub || (!n && arg.replace(HUB_RE, '').trim())) return [{ text: 'Send *HUB* and one of East, West, South or Hospitality, e.g. *HUB WEST*.' }];
+    this.shiftHubs.set(m.senderId, { hub, at: this.now() });
+    this.hubs.set(m.senderId, { hub, at: this.now() });
+    const text = `🏟️ Your hub is *${hub}* for this shift (12 hours). I won’t ask again. *HUB OFF* to stop.`;
+    // If a log is waiting for its hub, carry on with it.
+    const p = this.pending.get(k);
+    if (p && p.asked === 'hub') {
+      p.hub = hub;
+      const [next] = await this.advance(m, p);
+      return [{ text: `${text}\n\n${next.text}` }];
+    }
+    return [{ text }];
+  }
+
+  /** "Describe them": short codes are read here; plain words go to the AI; numbered questions if it can't. */
+  private async answerDescribe(p: Pending, text: string, senderId: string): Promise<void> {
+    if (/^[-–—]+$/.test(text)) {
+      for (const f of DESCRIPTION_FIELDS) p[f] = '';
+      return;
+    }
+    const local = parseDetails(text, 'gender');
+    if (local.gender !== undefined) {
+      for (const f of DESCRIPTION_FIELDS) p[f] = local[f] ?? '';
+      return;
+    }
+    const d = this.ai?.describe ? await this.ai.describe(text, senderId).catch(() => null) : null;
+    if (!d) {
+      p.describeFallback = true;
+      return;
+    }
+    for (const f of DESCRIPTION_FIELDS) p[f] = d[f] ?? '';
+  }
+
+  private policy() {
+    return getSetting<{ text: string; by: string; at: string } | null>('refusal_policy', null);
+  }
+
+  private async policyCommand(m: InboundMessage, arg?: string): Promise<string> {
+    if (!arg) {
+      const pol = await this.policy();
+      return pol ? `📋 *Refusal policy* (set by ${sanitize(pol.by, 60)}):\n${sanitize(pol.text, 3000)}` : 'No refusal policy set yet. A group admin can set it with *POLICY* followed by your rules.';
+    }
+    const denied = await this.supervisorOnly(m, 'set the policy');
+    if (denied) return denied;
+    if (/^(off|clear|none)$/i.test(arg)) {
+      await setSetting('refusal_policy', null);
+      return '📋 Policy cleared.';
+    }
+    await setSetting('refusal_policy', { text: arg.slice(0, 4000), by: (m.senderName || 'an admin').slice(0, 60), at: new Date(this.now()).toISOString() });
+    return '✅ Policy saved. Stewards can now ask *ADVICE* and what they see, e.g. *ADVICE slurring, unsteady, polite*.';
+  }
+
+  private async advice(m: InboundMessage, situation: string): Promise<string> {
+    if (!this.ai?.advise) return '🤖 Advice needs the AI helper. Ask the organiser to set it up.';
+    if (!situation) return 'Describe what you see after *ADVICE*, e.g. *ADVICE slurring, unsteady, polite*.';
+    const pol = await this.policy();
+    if (!pol) return 'No refusal policy set yet. A group admin can set it with *POLICY* followed by your rules.';
+    const res = await this.ai.advise(situation, pol.text, m.senderId);
+    if (res.kind === 'draft') return '🤖 Sorry, I couldn’t work that out. Ask a supervisor.';
+    if (res.kind === 'error') return res.text;
+    return `🤖 ${res.text}\n_You decide: this is only a suggestion from the venue policy. If unsure, ask a supervisor._`;
   }
 
   // ---------------------------------------------------------------- FIND, NOTE, PARTY, EDIT
@@ -1157,6 +1313,29 @@ export function parsePartialSeat(text: string): { section: string; row?: string;
   return null;
 }
 
+/** Words that mean the steward has already decided: refused, sent away (30 min) or ejected. */
+const DECISION_WORDS =
+  /\b(refus\w*|turned (him|her|them) away|turned away|not let (him|her|them) in|denied|sent (him|her|them) away|sent away|send (him|her|them) away|30 ?min\w*|thirty minutes|cool(ing)?[- ]?off|come back later|eject\w*|thrown out|threw (him|her|them) out|kicked out|removed)\b/i;
+
+/** "Intoxicated, Already refused, tried re-entry" -> its reasons (the re-entry one has a lower-case "tried"). */
+function splitReasons(reasoning: string | null | undefined): string[] {
+  if (!reasoning || reasoning === 'Not provided') return [];
+  return reasoning.split(/,\s*(?=[A-Z])/).map((r) => r.trim()).filter(Boolean);
+}
+
+/**
+ * A re-entry attempt: add "Already refused, tried re-entry" (or "sent away") and any new reasons
+ * to the existing record, without repeats. Returns the new reasoning.
+ */
+async function addReentryReason(ticketId: string, current: string, previousStatus: string, newReasons?: string): Promise<string> {
+  const label = previousStatus === 'cooling_off' ? 'Already sent away, tried re-entry' : 'Already refused, tried re-entry';
+  const merged = splitReasons(current);
+  for (const r of [label, ...splitReasons(newReasons)]) if (!merged.includes(r)) merged.push(r);
+  const text = merged.join(', ').slice(0, 2000);
+  if (text !== current) await getPool().query('UPDATE tickets SET reasoning = $2 WHERE ticket_id = $1', [ticketId, text]);
+  return text;
+}
+
 /** All seats of a log: one, a row list ("205 206 207"), or seats across rows from a ticket. */
 function seatList(p: Pending): SeatRef[] {
   if (p.groupSeats?.length) return p.groupSeats;
@@ -1259,7 +1438,8 @@ function confirmation(o: ScanOutcome, hub: Hub, p: Pending): string {
       return (
         `🚨 *ALREADY ${t.current_status === 'cooling_off' ? 'SENT AWAY' : 'REFUSED'}* · ${seat}\n` +
         `First at *${origin?.hub_location ?? 'another hub'}* ${origin ? formatClock(origin.timestamp) : ''} by ${sanitize(origin?.steward_name ?? '?', 100)}${left}.\n` +
-        `Logged as a second attempt at ${hub} ${when}. ⛔ Do not admit.`
+        `Logged as a second attempt at ${hub} ${when}. ⛔ Do not admit.` +
+        (t.reasoning && t.reasoning !== 'Not provided' ? `\n📝 ${sanitize(t.reasoning, 300)}` : '')
       );
     }
     case 'REASSESSMENT':
@@ -1283,6 +1463,7 @@ export const STEWARD_HELP =
   '*Ticket photo:* send it captioned *REFUSED* / *30* / *EJECTED* and I read the seat (several seats: pick with *1 3* or *ALL*). Caption *SCAN* just checks them.\n' +
   'I’ll then ask: hub, reasons, male/female, height, build, minor or adult, and what they’re wearing.\n' +
   '*BACK*: change your last answer · *CANCEL*: stop · *UNDO*: remove your last saved record (15 min)\n' +
+  '*HUB WEST*: set your hub for the shift (*HUB OFF* to stop)\n' +
   `*Reasons* (one or more, e.g. *1 3 5*): ${REASONS.map((r, i) => `${i + 1} ${r}`).join(' · ')}\n\n` +
   '*Check:* send the seat, e.g. *52 YY 14* · *313 L*: everyone in section 313 row L · *313*: the whole section\n' +
   '*FIND green hat*: search descriptions\n' +
@@ -1296,4 +1477,7 @@ export const STEWARD_HELP =
 export const AI_HELP =
   '\n\n🤖 *Ask in plain English:* start with *GK* (or @mention me), e.g. *GK anyone in a red coat sent away?* ' +
   'or *GK refused a drunk lad in a green hat, 313 YY 56, West*. In a private chat, just type. ' +
-  'I show you what I understood before saving anything.';
+  'I show you what I understood before saving anything.\n' +
+  '📸 *Ticket photo + a few words*, e.g. *drunk, swearing, tall lad green hat, West*: one message logs it.\n' +
+  '🎙️ *Voice note* in a private chat with me: say the report, then reply YES.\n' +
+  '⚖️ *ADVICE what you see*: a suggestion from the venue policy (admins set it with *POLICY …*).';

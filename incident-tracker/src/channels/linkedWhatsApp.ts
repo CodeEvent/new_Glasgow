@@ -92,6 +92,17 @@ export function messageImage(message: any): { mimetype?: string; caption?: strin
   return null;
 }
 
+/** A voice note or audio clip (unwrapping ephemeral messages). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function messageAudio(message: any): { mimetype?: string; seconds?: number } | null {
+  let m = message;
+  for (let i = 0; i < 4 && m; i++) {
+    if (m.audioMessage) return m.audioMessage;
+    m = m.ephemeralMessage?.message ?? m.viewOnceMessage?.message ?? m.viewOnceMessageV2?.message;
+  }
+  return null;
+}
+
 function timestampSeconds(ts: WAMessage['messageTimestamp']): number {
   if (typeof ts === 'number') return ts;
   if (ts && typeof (ts as any).toNumber === 'function') return (ts as any).toNumber();
@@ -309,8 +320,25 @@ export class LinkedWhatsApp {
           return;
         }
       }
+      // Voice notes: private chats only, and only when the AI can listen (never downloaded otherwise).
+      const voice = messageAudio(msg.message);
+      let audio: { data: Buffer; mime: string } | null = null;
+      if (voice) {
+        if (isGroup) return note('voice note in a group, ignored');
+        if ((voice.seconds ?? 0) > 120) {
+          await this.sock?.sendMessage(jid, { text: '🎙️ That voice note is too long. Keep it under a minute, or type it.' }, { quoted: msg });
+          return note('voice note too long');
+        }
+        try {
+          const b = await loadBaileys();
+          audio = { data: await b.downloadMediaMessage(msg, 'buffer', {}), mime: voice.mimetype ?? 'audio/ogg' };
+        } catch (err) {
+          console.error('[linked-wa] could not download voice note:', (err as Error).message);
+          return note('voice note could not be downloaded');
+        }
+      }
       const text = img ? (img.caption ?? null) : messageText(msg.message);
-      if (!text && !image) return note('no text or photo, ignored');
+      if (!text && !image && !audio) return note('no text, photo or voice, ignored');
 
       const mentioned = messageMentions(msg.message);
       const mentionsBot = mentioned.length > 0 && this.isMe(mentioned);
@@ -321,6 +349,7 @@ export class LinkedWhatsApp {
         // "@447… how many refused?" -> "how many refused?"
         text: mentionsBot && text ? text.replace(/@\d{5,}\s*/g, '').trim() : text,
         mentionsBot,
+        audio,
         image,
         at: new Date(timestampSeconds(msg.messageTimestamp) * 1000),
       });

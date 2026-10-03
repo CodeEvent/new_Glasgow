@@ -63,7 +63,7 @@ describe('choosing the AI', () => {
     expect(pick({ ANTHROPIC_API_KEY: 'a', AI_PROVIDER: 'gemini' })).toBeUndefined(); // asked for Gemini, no key
   });
   it('uses the model for the chosen provider', () => {
-    expect((pick({ GEMINI_API_KEY: 'g' }) as GeminiAgent).model).toBe('gemini-flash-latest');
+    expect((pick({ GEMINI_API_KEY: 'g' }) as GeminiAgent).model).toBe('gemini-flash-lite-latest'); // the free tier allows far more requests than Flash
     expect((pick({ GEMINI_API_KEY: 'g', AI_MODEL: 'gemini-2.5-flash' }) as GeminiAgent).model).toBe('gemini-2.5-flash');
   });
 });
@@ -112,6 +112,17 @@ describe.skipIf(!HAS_DB)('Gemini helper (PostgreSQL)', () => {
     expect(a.text).toContain('🔴 *REFUSED* · 313 YY 56 · West Hub');
     expect((await getPool().query('SELECT count(*)::int AS n FROM tickets')).rows[0].n).toBe(0);
     expect((await bot.handle(msg('dave', 'YES')))[0].text).toContain('✅ Logged 🔴 *REFUSED* · 313 YY 56');
+  });
+
+  it('retries when Gemini is briefly overloaded', async () => {
+    const overloaded = () => new ApiError({ message: 'high demand', status: 503 });
+    const { client, requests } = fakeGemini([overloaded(), overloaded(), { text: 'All quiet tonight.' }]);
+    bot.ai = new GeminiAgent('k', 'gemini-flash-latest', Date.now, client, 1);
+    expect((await bot.handle(msg('sarah', 'GK anything?')))[0].text).toBe('🤖 All quiet tonight.');
+    expect(requests).toHaveLength(3);
+    const { client: c2 } = fakeGemini([overloaded(), overloaded(), overloaded()]);
+    bot.ai = new GeminiAgent('k', 'gemini-flash-latest', Date.now, c2, 1);
+    expect((await bot.handle(msg('sarah', 'GK anything?')))[0].text).toContain('busy');
   });
 
   it('explains errors in plain words', async () => {

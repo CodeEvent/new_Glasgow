@@ -9,6 +9,8 @@ Stewards log and check refused patrons entirely inside your **work WhatsApp grou
 | `52 YY 14` | 🔴 REFUSED … with the reasons, description, who logged it, where and when, plus the photo |
 | `52 YY 14` (nothing logged) | ✅ NOT REFUSED |
 | `LIST` | everyone refused or sent away right now: seat, reasons, hub and time, description, 🚨 if they tried another hub |
+| `HUB WEST` (or `HUB 2`) | 🏟️ sets your hub for the shift (12 h): no more hub question. `HUB` shows it, `HUB OFF` clears it. For someone **already refused or sent away**, the bot still asks *which hub are they trying to get in at?* |
+| a seat that's already refused/sent away | ⚠️ flagged straight away; the record gets the reason **"Already refused, tried re-entry"** (or "Already sent away, …") plus any new reasons, and 🚨 if it's another hub |
 | `STATS` | tonight's numbers: refused, ejected, sent away, cleared, hub-hops, by reason, by hub, minors, people in groups |
 | `313 L` or `234 O` (section and row), `313` or `SECTION 313` (whole section) | 🔎 everyone on record there, in seat order. A bare number only gets a reply if something is on record, so normal chat like "10" is ignored. |
 | `FIND green hat` | searches tonight's descriptions, reasons and notes; for when you see someone but don't know their seat |
@@ -74,13 +76,20 @@ Ordinary group chat is never sent to the AI: only messages starting with `GK`, @
 
 **What leaves the phone:** the steward's message and the matching records (seat, status, reasons, description, hub and time, notes). **Never** photos, steward names, phone numbers or ticket/QR codes. The AI can only read records; saving, clearing and deleting stay with the normal commands. `AI_DAILY_LIMIT` (default 200 a day, 30 per steward per hour) caps use; each call's tokens show in `gk-log` as `[ai] …`.
 
+### Faster reporting with the AI on
+
+- **One description question:** instead of five numbered questions, *Describe them*: `tall heavy lad about 20, green hat` (short codes like `M 3 2 adult green hat` still work, `-` skips). If the AI is busy, the numbered questions come back.
+- **Ticket photo + a few words:** photo of the ticket captioned `drunk, swearing, tall lad green hat, West`. The seat is read **on the phone**; only the words go to the AI. You confirm with **YES**.
+- **Voice notes** (private chat with the bot only, under a minute): say *"Refused, 101 A 4, very drunk and abusive, tall guy in a blue cap, South hub"*, then **YES**. The recording goes to Google; voice notes in the group are never downloaded.
+- **Advice from your policy:** an admin sends `POLICY Refuse if aggressive or can't stand; 30 minutes if mildly drunk and calm…`; stewards send `ADVICE slurring, unsteady, polite`. When a plain-English report doesn't say refused or sent away, the bot shows the policy suggestion and **asks**; the AI never decides that for you.
+
 ### Free: Google Gemini (recommended to start)
 
 1. On any device, go to **https://aistudio.google.com**, sign in with a Google account, and click **Get API key → Create API key**. No card needed.
-2. On the Android, in Termux: `gk-set GEMINI_API_KEY <your key>` (stored only on the phone, never shown again). `gk-log` shows `AI helper on (gemini-flash-latest, …)`.
+2. On the Android, in Termux: `gk-set GEMINI_API_KEY <your key>` (stored only on the phone, never shown again). `gk-log` shows `AI helper on (gemini-flash-lite-latest, …)`.
 3. Send `HELP` in the group: the AI part is listed at the end.
 
-**Free tier limits:** Google allows a limited number of requests per minute and per day; when they run out, the bot says the AI is busy and the normal commands keep working. **Privacy:** on the free tier Google may use what's sent to improve its products (and people at Google may review it). The bot only sends descriptions and reasons, never photos or names, but **mention Google as a processor in your privacy notice.** A paid Google plan or Claude avoids this.
+**Free tier limits:** the bot uses **Flash-Lite**, whose free quota is much bigger than Flash's (Flash allowed only **20 requests a day**). Brief Google overloads are retried automatically. Google allows a limited number of requests per minute and per day; when they run out, the bot says the AI is busy and the normal commands keep working. **Privacy:** on the free tier Google may use what's sent to improve its products (and people at Google may review it). The bot only sends descriptions and reasons, never photos or names, but **mention Google as a processor in your privacy notice.** A paid Google plan or Claude avoids this.
 
 ### Paid: Claude (Anthropic)
 

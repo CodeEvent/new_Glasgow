@@ -4,9 +4,9 @@ import { closePool } from '../src/db/pool';
 import { HAS_DB, resetDatabase, tempOfflineLog } from './helpers';
 
 // WhatsApp media downloads go to WhatsApp's servers; return a known image instead.
-const media = { buffer: Buffer.alloc(0) };
+const media = { buffer: Buffer.alloc(0), downloads: 0 };
 vi.mock('../src/channels/baileys', () => ({
-  loadBaileys: async () => ({ downloadMediaMessage: async () => media.buffer }),
+  loadBaileys: async () => ({ downloadMediaMessage: async () => (media.downloads++, media.buffer) }),
 }));
 
 const { LinkedWhatsApp, messageImage, messageText } = await import('../src/channels/linkedWhatsApp');
@@ -133,6 +133,24 @@ describe.skipIf(!HAS_DB)('linked WhatsApp bot routing (fake socket)', () => {
     expect(sent.map((m) => m.jid)).toEqual(['447700900111@s.whatsapp.net', '447700900111@s.whatsapp.net']);
     expect(sent[0].content.text).toBe('🗂️ backup');
     expect(sent[1].content.fileName).toBe('x.csv');
+  });
+
+  it('listens to voice notes only in private chats', async () => {
+    const heard: Array<{ mime: string; bytes: number }> = [];
+    (wa as unknown as { bot: { ai: unknown } }).bot.ai = {
+      handle: async () => ({ kind: 'answer', text: 'x' }),
+      handleAudio: async (audio: Buffer, mime: string) => (heard.push({ mime, bytes: audio.length }), { kind: 'answer', text: 'Nobody in a red coat tonight.' }),
+    };
+    media.buffer = Buffer.from('OggS-voice');
+    media.downloads = 0;
+    deliver(waMsg(GROUP, { audioMessage: { mimetype: 'audio/ogg; codecs=opus', seconds: 4, ptt: true } }, { participant: '111@lid' }));
+    await settle();
+    expect(media.downloads).toBe(0); // group voice notes are never downloaded
+    expect(sent).toEqual([]);
+    deliver(waMsg('447700900111@s.whatsapp.net', { audioMessage: { mimetype: 'audio/ogg; codecs=opus', seconds: 4, ptt: true } }));
+    await settle();
+    expect(heard).toEqual([{ mime: 'audio/ogg; codecs=opus', bytes: 10 }]);
+    expect(sent[0].content.text).toBe('🤖 Nobody in a red coat tonight.');
   });
 
   it('sends the stored photo back with a check', async () => {

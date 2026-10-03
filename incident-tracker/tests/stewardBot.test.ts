@@ -239,7 +239,7 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
     expect(r.text).toContain('• *313 H 02* · Intoxicated, Abusive · West');
     expect(r.text).toContain('👤 Male · Tall · Average build · Adult · green hat');
     expect(r.text).toContain('🟠 *SENT AWAY* (1)');
-    expect(r.text).toMatch(/\*52 YY 14\* · Under the influence · South \d\d:\d\d · back \d\d:\d\d \(30 min\) · 🚨 tried again ×1/);
+    expect(r.text).toMatch(/\*52 YY 14\* · Under the influence, Already sent away, tried re-entry · South \d\d:\d\d · back \d\d:\d\d \(30 min\) · 🚨 tried again ×1/);
     // A half-finished log isn't disturbed by LIST.
     await bot.handle(msg('dave', 'REFUSED 1 A 1 West'));
     await bot.handle(msg('dave', 'list'));
@@ -254,7 +254,7 @@ describe.skipIf(!HAS_DB)('steward WhatsApp flow (PostgreSQL)', () => {
     const [r] = await bot.handle(msg('sarah', 'stats'));
     expect(r.text).toContain('3 logged · 🔴 2 refused · 🟠 1 sent away now');
     expect(r.text).toContain('🚨 1 tried another hub (1 attempts)');
-    expect(r.text).toContain('*Reasons:* Intoxicated 2 · Abusive 1 · Intoxicated minor 1');
+    expect(r.text).toContain('*Reasons:* Intoxicated 2 · Abusive 1 · Already sent away, tried re-entry 1 · Intoxicated minor 1');
     expect(r.text).toContain('*Hubs:* West 2 · South 1');
     expect(r.text).toContain('*Minors:* 1');
   });
