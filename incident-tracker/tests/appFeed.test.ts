@@ -98,6 +98,22 @@ describe.skipIf(!HAS_DB)('live feed, alerts and editing (PostgreSQL)', () => {
     expect((await amy.delete(`/api/app/records/${encodeURIComponent(mine)}`)).status).toBe(403);
   });
 
+  it('an area supervisor can’t undo a later decision by someone else, or make a record less serious', async () => {
+    await log(amy, { decision: 'cool_off' });
+    const id = await ticketId('56');
+    const edit = (body: object) => json(amy.patch(`/api/app/records/${encodeURIComponent(id)}`)).send(body);
+    expect((await edit({ status: 'refused' })).status).toBe(200); // more serious: fine
+    expect((await edit({ status: 'ejected' })).status).toBe(200);
+    expect((await edit({ status: 'refused' })).status).toBe(403); // less serious
+    expect((await edit({ status: 'sent_away' })).status).toBe(403);
+    expect((await ticket('56')).reasoning).toMatch(/^Ejected/);
+    // A senior logs over it: it's no longer only Amy's
+    await log(sam, { hub: 'East Hub', reasons: ['Abusive'] });
+    expect((await edit({ description: 'x' })).status).toBe(403);
+    const mineInFeed = (await amy.get('/api/app/feed')).body.items.filter((i: { seat: string }) => i.seat === '313 YY 56');
+    expect(mineInFeed.every((i: { can_edit: boolean }) => !i.can_edit)).toBe(true);
+  });
+
   it('seniors change the status, clear and delete; it’s all in the audit log', async () => {
     await log(amy, { reasons: ['Abusive'] });
     const id = await ticketId('56');

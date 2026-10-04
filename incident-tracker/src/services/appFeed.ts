@@ -60,7 +60,7 @@ interface FeedRow {
   section: string | null;
   row_label: string | null;
   seat_number: string | null;
-  owner_id: string | null;
+  only_mine: boolean;
 }
 
 const statusOf = (r: { current_status: string; reasoning: string }): FeedItem['status'] =>
@@ -75,11 +75,11 @@ export async function listFeed(user: AppUser, limit = 150): Promise<FeedItem[]> 
     `SELECT e.id, e.timestamp, e.ticket_id, e.hub_location, e.steward_name, e.is_breach_event,
             (SELECT count(*)::int FROM scan_events p WHERE p.ticket_id = e.ticket_id AND p.timestamp < e.timestamp) AS previous_logs,
             t.current_status, t.reasoning, t.description, t.party_size, t.cool_down_until, t.section, t.row_label, t.seat_number,
-            (SELECT o.user_id FROM scan_events o WHERE o.ticket_id = t.ticket_id ORDER BY o.timestamp ASC LIMIT 1) AS owner_id
+            (SELECT bool_and(o.user_id IS NOT DISTINCT FROM $2::uuid) FROM scan_events o WHERE o.ticket_id = t.ticket_id) AS only_mine
        FROM scan_events e JOIN tickets t ON t.ticket_id = e.ticket_id
       ORDER BY e.timestamp DESC
       LIMIT $1`,
-    [Math.min(Math.max(limit, 1), 500)],
+    [Math.min(Math.max(limit, 1), 500), user.id],
   );
   return rows.map((r) => ({
     id: r.id,
@@ -94,7 +94,7 @@ export async function listFeed(user: AppUser, limit = 150): Promise<FeedItem[]> 
     description: clean(r.description),
     party: r.party_size,
     back_at: r.current_status === 'cooling_off' && r.cool_down_until ? new Date(r.cool_down_until).toISOString() : null,
-    can_edit: can(user, 'edit', { ownerId: r.owner_id }),
+    can_edit: can(user, 'edit', { ownerId: r.only_mine ? user.id : null }),
     can_delete: can(user, 'delete'),
   }));
 }
@@ -104,12 +104,13 @@ export async function listFeed(user: AppUser, limit = 150): Promise<FeedItem[]> 
 const EDIT_STATUSES = ['refused', 'sent_away', 'ejected', 'admitted'] as const;
 type EditStatus = (typeof EDIT_STATUSES)[number];
 
-async function recordFor(ticketId: string) {
-  const { rows } = await getPool().query<{ ticket_id: string; current_status: string; reasoning: string; section: string | null; row_label: string | null; seat_number: string | null; owner_id: string | null }>(
+/** A record, and whether every log on it was made by `userId` (only then may an area supervisor change it). */
+async function recordFor(ticketId: string, userId: string) {
+  const { rows } = await getPool().query<{ ticket_id: string; current_status: string; reasoning: string; section: string | null; row_label: string | null; seat_number: string | null; only_mine: boolean }>(
     `SELECT t.ticket_id, t.current_status, t.reasoning, t.section, t.row_label, t.seat_number,
-            (SELECT o.user_id FROM scan_events o WHERE o.ticket_id = t.ticket_id ORDER BY o.timestamp ASC LIMIT 1) AS owner_id
+            (SELECT bool_and(o.user_id IS NOT DISTINCT FROM $2::uuid) FROM scan_events o WHERE o.ticket_id = t.ticket_id) AS only_mine
        FROM tickets t WHERE t.ticket_id = $1`,
-    [ticketId.slice(0, 64)],
+    [ticketId.slice(0, 64), userId],
   );
   if (!rows[0]) throw new FeedError('That record isn’t there any more.', 404);
   return rows[0];
@@ -121,12 +122,19 @@ export async function editRecord(
   ticketId: string,
   body: { status?: unknown; reasoning?: unknown; description?: unknown; party?: unknown },
 ): Promise<void> {
-  const rec = await recordFor(ticketId);
-  if (!can(user, 'edit', { ownerId: rec.owner_id })) throw new FeedError('You can only change your own logs.', 403);
+  const rec = await recordFor(ticketId, user.id);
+  if (!can(user, 'edit', { ownerId: rec.only_mine ? user.id : null })) {
+    throw new FeedError('You can only change records that only you have logged. Ask a senior supervisor.', 403);
+  }
 
   const status = body.status === undefined ? undefined : (String(body.status) as EditStatus);
   if (status !== undefined && !EDIT_STATUSES.includes(status)) throw new FeedError('Status: refused, sent_away, ejected or admitted.');
   if (status === 'admitted' && !can(user, 'delete')) throw new FeedError('Only senior supervisors can clear someone to come in.', 403);
+  // Area supervisors may make a record more serious, never less (that would be a way round clearing).
+  const RANK: Record<string, number> = { admitted: 0, sent_away: 1, refused: 2, ejected: 3 };
+  if (status !== undefined && !can(user, 'delete') && RANK[status] < RANK[statusOf(rec)]) {
+    throw new FeedError('Only senior supervisors can make a record less serious.', 403);
+  }
   const text = (v: unknown, name: string) => {
     if (v === undefined) return undefined;
     const s = String(v).trim();
@@ -168,7 +176,7 @@ export async function editRecord(
 }
 
 export async function removeRecord(user: AppUser, ticketId: string): Promise<void> {
-  const rec = await recordFor(ticketId);
+  const rec = await recordFor(ticketId, user.id);
   if (!can(user, 'delete')) throw new FeedError('Only senior supervisors can delete records.', 403);
   await getPool().query('DELETE FROM tickets WHERE ticket_id = $1', [rec.ticket_id]);
   const seat = seatOf(rec);
