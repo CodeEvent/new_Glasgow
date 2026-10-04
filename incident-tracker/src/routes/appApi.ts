@@ -15,6 +15,7 @@ import {
   updateUser,
 } from '../services/accounts';
 import { LogError, checkSeat, describeWithAi, logIncident, logOptions, scanTicket, searchRecords } from '../services/appLog';
+import { FeedError, appEvents, editRecord, listFeed, removeRecord, type AppEvent } from '../services/appFeed';
 import { can, type Action, type AppUser } from '../services/permissions';
 
 /**
@@ -63,7 +64,7 @@ const wrap =
   (fn: (req: Request, res: Response) => Promise<void>) =>
   (req: Request, res: Response, next: NextFunction) =>
     fn(req, res).catch((err) => {
-      if (err instanceof AccountError || err instanceof LogError) {
+      if (err instanceof AccountError || err instanceof LogError || err instanceof FeedError) {
         res.status(err.status).json({ ok: false, error: err.message });
         return;
       }
@@ -220,5 +221,56 @@ appApiRouter.post(
   wrap(async (req, res) => {
     if (!Buffer.isBuffer(req.body) || !req.body.length) throw new LogError('Send a photo of the ticket.', 415);
     res.json({ ok: true, ...(await scanTicket(req.body)) });
+  }),
+);
+
+// ---------------------------------------------------------------- live feed, alerts, editing
+
+appApiRouter.get(
+  '/feed',
+  allow('view'),
+  wrap(async (req, res) => {
+    res.json({ ok: true, items: await listFeed(userOf(req)) });
+  }),
+);
+
+/** Alerts pushed to open phones (server-sent events). Ends when the login does. */
+appApiRouter.get('/stream', allow('view'), (req, res) => {
+  const token = (req as AuthedRequest).token;
+  res.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no', // don't let a proxy hold the events back
+  });
+  res.write(':ok\n\n');
+  const send = (e: AppEvent) => res.write(`event: ${e.kind}\ndata: ${JSON.stringify(e)}\n\n`);
+  appEvents.on('event', send);
+  const beat = setInterval(async () => {
+    if (await sessionUser(token).catch(() => null)) res.write(':beat\n\n');
+    else res.end();
+  }, 25_000);
+  (beat as { unref?: () => void }).unref?.();
+  req.on('close', () => {
+    clearInterval(beat);
+    appEvents.off('event', send);
+  });
+});
+
+appApiRouter.patch(
+  '/records/:id',
+  allow(),
+  wrap(async (req, res) => {
+    await editRecord(userOf(req), String(req.params.id), req.body ?? {});
+    res.json({ ok: true });
+  }),
+);
+
+appApiRouter.delete(
+  '/records/:id',
+  allow(),
+  wrap(async (req, res) => {
+    await removeRecord(userOf(req), String(req.params.id));
+    res.json({ ok: true });
   }),
 );

@@ -6,6 +6,7 @@ import { listRecords, type RecordRow } from './adminRecords';
 import type { AiHelper, DescriptionFields } from './aiAgent';
 import { normReason } from './aiAgent';
 import { createAiAgent } from './aiProvider';
+import { emitAppEvent } from './appFeed';
 import { addCustomOption, cleanTerm, refreshCustomOptions } from './customOptions';
 import { appendOfflineIncident } from './offlineBuffer';
 import { can, type AppUser } from './permissions';
@@ -199,6 +200,9 @@ export async function logIncident(user: AppUser, body: unknown): Promise<{ resul
     });
   }
 
+  for (const r of results) {
+    emitAppEvent({ kind: 'log', seat: r.seat, status: r.status, hub, by: user.name, reentry: r.reentry, first_hub: r.first_hub, at: new Date().toISOString() });
+  }
   await getPool()
     .query('INSERT INTO app_log_requests (client_id, user_id, results) VALUES ($1, $2, $3) ON CONFLICT (client_id) DO NOTHING', [v.client_id, user.id, JSON.stringify(results)])
     .catch(() => undefined);

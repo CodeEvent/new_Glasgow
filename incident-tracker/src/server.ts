@@ -10,6 +10,7 @@ import { startOfflineSyncWatchdog } from './services/offlineSync';
 import { linkedWhatsApp } from './channels/linkedWhatsApp';
 import { startRetentionJob } from './services/retention';
 import { startNightJobs } from './services/nightReport';
+import { startFeedJobs } from './services/appFeed';
 import { startHealthJob } from './services/health';
 
 const app = createApp();
@@ -21,6 +22,7 @@ const server = app.listen(config.PORT, process.env.HOST || '0.0.0.0', () => {
 
 const stopWatchdog = startOfflineSyncWatchdog();
 const stopRetention = startRetentionJob();
+const stopFeedJobs = startFeedJobs(); // 'may now be readmitted' alerts in the app
 
 // Readmit reminders and the end-of-night summary, posted into the selected WhatsApp groups.
 const stopNightJobs = config.WA_LINKED_ENABLED
@@ -49,6 +51,7 @@ async function shutdown(signal: string) {
   console.log(`[gatekeeper] ${signal} received, draining…`);
   stopWatchdog();
   stopRetention();
+  stopFeedJobs();
   stopNightJobs();
   stopHealth();
   await linkedWhatsApp.stop().catch(() => undefined);
