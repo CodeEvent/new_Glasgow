@@ -4,7 +4,7 @@ import { createApp } from '../src/app';
 import { resetConfigCache } from '../src/config/env';
 import { closePool, getPool } from '../src/db/pool';
 import { can, type AppUser } from '../src/services/permissions';
-import { hashPin, resetLoginLimits, setLoginTrackingCap, verifyPin } from '../src/services/accounts';
+import { deviceKey, hashPin, resetLoginLimits, setLoginTrackingCap, verifyPin } from '../src/services/accounts';
 import { HAS_DB, resetDatabase, tempOfflineLog } from './helpers';
 
 const area = (hub: string, id = 'a1'): AppUser => ({ id, name: 'Amy', role: 'area', hub });
@@ -83,10 +83,10 @@ describe.skipIf(!HAS_DB)('accounts API (PostgreSQL)', () => {
 
   it('the superadmin adds people; they log in with name + PIN; the cookie is HttpOnly', async () => {
     const gio = await setupSuperadmin();
-    const add = await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '2468' });
+    const add = await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '246813' });
     expect(add.status).toBe(200);
     expect(add.body.user).not.toHaveProperty('pin_hash');
-    const login = await json(request(app).post('/api/app/login')).send({ name: ' amy ', pin: '2468' });
+    const login = await json(request(app).post('/api/app/login')).send({ name: ' amy ', pin: '246813' });
     expect(login.status).toBe(200);
     expect(login.body.user).toMatchObject({ name: 'Amy', role: 'area', hub: 'West Hub' });
     const cookie = String(login.headers['set-cookie']);
@@ -100,12 +100,13 @@ describe.skipIf(!HAS_DB)('accounts API (PostgreSQL)', () => {
   it('checks the rules for people and PINs', async () => {
     const gio = await setupSuperadmin();
     const add = (body: object) => json(gio.post('/api/app/users')).send(body);
-    expect((await add({ name: 'Amy', role: 'area', pin: '2468' })).body.error).toMatch(/area/i); // area needs a hub
-    expect((await add({ name: 'Sam', role: 'senior', pin: '1234' })).body.error).toMatch(/6/); // admins need 6+ digits
-    expect((await add({ name: 'Bob', role: 'area', hub: 'East Hub', pin: '12a4' })).body.error).toMatch(/digits/);
+    expect((await add({ name: 'Amy', role: 'area', pin: '246813' })).body.error).toMatch(/area/i); // area needs a hub
+    expect((await add({ name: 'Sam', role: 'senior', pin: '1234' })).body.error).toMatch(/6/); // 6+ digits
+    expect((await add({ name: 'Ann', role: 'area', hub: 'East Hub', pin: '1234' })).body.error).toMatch(/6/);
+    expect((await add({ name: 'Bob', role: 'area', hub: 'East Hub', pin: '12a456' })).body.error).toMatch(/digits/);
     expect((await add({ name: 'Bob', role: 'king', pin: '123456' })).status).toBe(400);
-    await add({ name: 'Bob', role: 'area', hub: 'East Hub', pin: '1357' });
-    expect((await add({ name: 'BOB', role: 'area', hub: 'East Hub', pin: '1357' })).body.error).toMatch(/already/i);
+    await add({ name: 'Bob', role: 'area', hub: 'East Hub', pin: '135724' });
+    expect((await add({ name: 'BOB', role: 'area', hub: 'East Hub', pin: '135724' })).body.error).toMatch(/already/i);
   });
 
   it('only the superadmin manages accounts', async () => {
@@ -120,7 +121,7 @@ describe.skipIf(!HAS_DB)('accounts API (PostgreSQL)', () => {
 
   it('wrong PINs: same answer for unknown names, and a lockout after 5 tries', async () => {
     const gio = await setupSuperadmin();
-    await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '2468' });
+    await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '246813' });
     const tryLogin = (name: string, pin: string) => json(request(app).post('/api/app/login')).send({ name, pin });
     const unknown = await tryLogin('Nobody', '0000');
     const wrong = await tryLogin('Amy', '0000');
@@ -128,7 +129,7 @@ describe.skipIf(!HAS_DB)('accounts API (PostgreSQL)', () => {
     expect(wrong.status).toBe(401);
     expect(unknown.body.error).toBe(wrong.body.error);
     for (let i = 0; i < 4; i++) await tryLogin('Amy', '0000');
-    const locked = await tryLogin('Amy', '2468'); // right PIN, but locked
+    const locked = await tryLogin('Amy', '246813'); // right PIN, but locked
     expect(locked.status).toBe(429);
     // unknown names lock the same way (no hint about who exists)
     for (let i = 0; i < 4; i++) await tryLogin('Nobody', '0000');
@@ -137,43 +138,77 @@ describe.skipIf(!HAS_DB)('accounts API (PostgreSQL)', () => {
 
   it('wrong PINs sent at the same moment still lock after 5', async () => {
     const gio = await setupSuperadmin();
-    await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '2468' });
+    await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '246813' });
     const burst = await Promise.all(Array.from({ length: 12 }, (_, i) => json(request(app).post('/api/app/login')).send({ name: 'Amy', pin: String(1000 + i) })));
     expect(burst.filter((r) => r.status === 401)).toHaveLength(5);
     expect(burst.filter((r) => r.status === 429)).toHaveLength(7);
-    expect((await json(request(app).post('/api/app/login')).send({ name: 'Amy', pin: '2468' })).status).toBe(429);
+    expect((await json(request(app).post('/api/app/login')).send({ name: 'Amy', pin: '246813' })).status).toBe(429);
   });
 
   it('flooding with made-up names doesn’t unlock a locked name', async () => {
     const gio = await setupSuperadmin();
-    await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '2468' });
+    await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '246813' });
     setLoginTrackingCap(5);
     try {
       for (let i = 0; i < 5; i++) await json(request(app).post('/api/app/login')).send({ name: 'Amy', pin: '0000' });
       for (let i = 0; i < 8; i++) await json(request(app).post('/api/app/login').set('x-forwarded-for', `10.0.0.${i}`)).send({ name: `Fake${i}`, pin: '0000' });
-      expect((await json(request(app).post('/api/app/login')).send({ name: 'Amy', pin: '2468' })).status).toBe(429);
+      expect((await json(request(app).post('/api/app/login')).send({ name: 'Amy', pin: '246813' })).status).toBe(429);
     } finally {
       setLoginTrackingCap(10_000);
     }
   });
 
-  it('one device guessing across many names is stopped', async () => {
+  it('a stranger can’t lock a supervisor out: the lock is for that name on that device', async () => {
+    const gio = await setupSuperadmin();
+    await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '246813' });
+    const from = (ip: string, pin: string) => json(request(app).post('/api/app/login').set('x-forwarded-for', ip)).send({ name: 'Amy', pin });
+    for (let i = 0; i < 5; i++) expect((await from('10.0.0.66', '000000')).status).toBe(401);
+    expect((await from('10.0.0.66', '246813')).status).toBe(429); // the stranger's device is locked
+    expect((await from('10.0.0.7', '246813')).status).toBe(200); // Amy's phone is not
+  });
+
+  it('20 wrong PINs from any devices lock the name; the superadmin can unlock it', async () => {
+    const gio = await setupSuperadmin();
+    const amyId = (await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '246813' })).body.user.id;
+    const from = (ip: string, pin: string) => json(request(app).post('/api/app/login').set('x-forwarded-for', ip)).send({ name: 'Amy', pin });
+    for (let d = 0; d < 4; d++) for (let i = 0; i < 5; i++) await from(`10.1.0.${d}`, '000000');
+    expect((await from('10.1.0.99', '246813')).status).toBe(429);
+    const { rows } = await getPool().query("SELECT action, detail FROM audit_log WHERE action = 'login_locked'");
+    expect(rows.map((r) => r.detail)).toContain('amy');
+    await json(gio.patch(`/api/app/users/${amyId}`)).send({ unlock: true });
+    expect((await from('10.1.0.99', '246813')).status).toBe(200);
+  });
+
+  it('a busy shared connection never blocks the right PIN', async () => {
     await setupSuperadmin();
-    const from = (name: string) => json(request(app).post('/api/app/login').set('x-forwarded-for', '10.9.9.9')).send({ name, pin: '0000' });
-    for (let i = 0; i < 30; i++) expect((await from(`Name${i}`)).status).toBe(401);
-    expect((await from('Gio')).status).toBe(429);
-    // a made-up address in front of the real one doesn't make it a new device
-    const spoofed = await json(request(app).post('/api/app/login').set('x-forwarded-for', '1.2.3.4, 10.9.9.9')).send({ name: 'Gio', pin: '482913' });
-    expect(spoofed.status).toBe(429);
-    // another device is unaffected
-    expect((await json(request(app).post('/api/app/login').set('x-forwarded-for', '10.9.9.10')).send({ name: 'Gio', pin: '482913' })).status).toBe(200);
+    const from = (name: string, pin: string) => json(request(app).post('/api/app/login').set('x-forwarded-for', '10.9.9.9')).send({ name, pin });
+    for (let i = 0; i < 35; i++) await from(`Name${i}`, '000000');
+    expect((await from('Gio', '482913')).status).toBe(200);
+  });
+
+  it('counts a device’s tries even when they arrive at once', async () => {
+    await setupSuperadmin();
+    await Promise.all(Array.from({ length: 40 }, (_, i) => json(request(app).post('/api/app/login').set('x-forwarded-for', '10.8.8.8')).send({ name: `Fake${i}`, pin: '000000' })));
+    const { _deviceFailures } = await import('../src/services/accounts');
+    expect(_deviceFailures('10.8.8.8')).toBeGreaterThanOrEqual(30);
+  });
+
+  it('IPv6 phones are grouped by network, so changing address doesn’t reset the count', async () => {
+    expect(deviceKey('2001:db8:1:2::a')).toBe(deviceKey('2001:db8:1:2:ffff::b'));
+    expect(deviceKey('2001:db8:1:3::a')).not.toBe(deviceKey('2001:db8:1:2::a'));
+    expect(deviceKey('::ffff:10.0.0.1')).toBe('10.0.0.1');
+    await setupSuperadmin();
+    const from = (ip: string) => json(request(app).post('/api/app/login').set('x-forwarded-for', ip)).send({ name: 'Gio', pin: '000000' });
+    for (let i = 0; i < 5; i++) await from(`2001:db8:1:2::${i + 1}`);
+    expect((await from('2001:db8:1:2::99')).status).toBe(429);
+    expect((await from('2001:db8:1:3::1')).status).toBe(401);
   });
 
   it('logout ends the session; a deactivated person is logged out at once', async () => {
     const gio = await setupSuperadmin();
-    const add = await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '2468' });
+    const add = await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '246813' });
     const amy = request.agent(app);
-    await json(amy.post('/api/app/login')).send({ name: 'Amy', pin: '2468' });
+    await json(amy.post('/api/app/login')).send({ name: 'Amy', pin: '246813' });
     expect((await amy.get('/api/app/me')).body.user.name).toBe('Amy');
     await json(gio.patch(`/api/app/users/${add.body.user.id}`)).send({ active: false });
     expect((await amy.get('/api/app/me')).status).toBe(401);
@@ -191,11 +226,11 @@ describe.skipIf(!HAS_DB)('accounts API (PostgreSQL)', () => {
 
   it('changes are written to the audit log', async () => {
     const gio = await setupSuperadmin();
-    await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '2468' });
+    await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '246813' });
     const { rows } = await getPool().query('SELECT user_name, action, detail FROM audit_log ORDER BY id');
     expect(rows.map((r) => r.action)).toEqual(['setup', 'user_added']);
     expect(rows[1]).toMatchObject({ user_name: 'Gio' });
-    expect(JSON.stringify(rows)).not.toContain('2468');
+    expect(JSON.stringify(rows)).not.toContain('246813');
   });
 
   it('rejects form posts from other sites (needs JSON)', async () => {

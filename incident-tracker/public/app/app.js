@@ -189,7 +189,7 @@ async function peopleView() {
     $('[data-form-title]', root).textContent = 'Add someone';
     $('[data-submit]', root).textContent = 'Add';
     $('[data-cancel]', root).hidden = true;
-    $('[data-pin-hint]', root).textContent = '(4–8 digits; 6–8 for seniors and superadmins)';
+    $('[data-pin-hint]', root).textContent = '(6–8 digits)';
     form.elements.pin.required = true;
     showError(root, '');
     syncHub();
@@ -234,6 +234,11 @@ async function peopleView() {
         if (!r.ok) return showError(root, r.error);
         toast(`${u.name} switched ${u.active ? 'off' : 'on'}.`);
         reset(); load();
+      } }),
+      el('button', { class: 'ghost', type: 'button', 'data-extra': true, text: 'Unlock', title: 'After too many wrong PINs', onclick: async () => {
+        const r = await api(`/users/${u.id}`, { method: 'PATCH', body: { unlock: true } });
+        if (!r.ok) return showError(root, r.error);
+        toast(`${u.name} can log in again.`);
       } }),
       el('button', { class: 'danger', type: 'button', 'data-extra': true, text: 'Remove', onclick: async () => {
         if (!confirm(`Remove ${u.name}? Their past logs stay, with their name.`)) return;
