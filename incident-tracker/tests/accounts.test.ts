@@ -201,6 +201,44 @@ describe.skipIf(!HAS_DB)('accounts API (PostgreSQL)', () => {
     expect((await json(amyPhone.post('/api/app/login')).send({ name: 'Amy', pin: '246813' })).status).toBe(200);
   });
 
+  it('a stolen trusted cookie gets 5 wrong PINs, then it’s cancelled', async () => {
+    const gio = await setupSuperadmin();
+    await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '246813' });
+    const phone = request.agent(app);
+    await json(phone.post('/api/app/login')).send({ name: 'Amy', pin: '246813' });
+    const devices = async () => (await getPool().query("SELECT count(*)::int AS n FROM app_devices d JOIN app_users u ON u.id = d.user_id WHERE u.name = 'Amy'")).rows[0].n;
+    expect(await devices()).toBe(1);
+    for (let i = 0; i < 5; i++) await json(phone.post('/api/app/login').set('x-forwarded-for', `10.5.0.${i}`)).send({ name: 'Amy', pin: '000000' });
+    expect(await devices()).toBe(0);
+    // Now it's a stranger: the name-wide lock applies to it again.
+    for (let d = 0; d < 3; d++) for (let i = 0; i < 5; i++) await json(request(app).post('/api/app/login').set('x-forwarded-for', `10.5.1.${d}`)).send({ name: 'Amy', pin: '000000' });
+    expect((await json(phone.post('/api/app/login').set('x-forwarded-for', '10.5.2.1')).send({ name: 'Amy', pin: '246813' })).status).toBe(429);
+  });
+
+  it('a new PIN, a new role, switching off or unlocking cancels the person’s trusted phones', async () => {
+    const gio = await setupSuperadmin();
+    const amyId = (await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '246813' })).body.user.id;
+    const devices = async () => (await getPool().query('SELECT count(*)::int AS n FROM app_devices WHERE user_id = $1', [amyId])).rows[0].n;
+    const loginOnce = () => json(request(app).post('/api/app/login')).send({ name: 'Amy', pin: '246813' });
+    for (const change of [{ pin: '246813' }, { role: 'senior', pin: '246813' }, { active: false }, { unlock: true }]) {
+      await json(gio.patch(`/api/app/users/${amyId}`)).send({ active: true, role: 'area', hub: 'West Hub' });
+      await loginOnce();
+      expect(await devices()).toBeGreaterThan(0);
+      await json(gio.patch(`/api/app/users/${amyId}`)).send(change);
+      expect(await devices()).toBe(0);
+    }
+  });
+
+  it('a made-up name locks just like a real one (no hint about who exists)', async () => {
+    await setupSuperadmin();
+    const probe = async (name: string) => {
+      for (let d = 0; d < 4; d++) for (let i = 0; i < 5; i++) await json(request(app).post('/api/app/login').set('x-forwarded-for', `10.6.${name.length}.${d}`)).send({ name, pin: '000000' });
+      return (await json(request(app).post('/api/app/login').set('x-forwarded-for', '10.6.99.1')).send({ name, pin: '000000' })).status;
+    };
+    expect(await probe('Gio')).toBe(429);
+    expect(await probe('Nobody')).toBe(429);
+  });
+
   it('each new lock on a name lasts twice as long', async () => {
     await setupSuperadmin();
     const t0 = Date.now();

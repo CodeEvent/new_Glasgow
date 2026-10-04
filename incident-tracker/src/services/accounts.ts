@@ -132,6 +132,7 @@ export async function updateUser(
   const u = await getUserRow(id);
   if (input.unlock === true) {
     unlockName(u.name);
+    await forgetDevices(u.id);
     await audit(by, 'user_unlocked', u.name);
   }
   const name = input.name !== undefined ? checkName(input.name) : u.name;
@@ -149,7 +150,10 @@ export async function updateUser(
       [id, name, nameKey(name), role, role === 'area' ? hub : null, pinHash, active],
     );
     // A new PIN, a new role or switching someone off logs them out everywhere.
-    if (pinHash !== u.pin_hash || role !== u.role || !active) await getPool().query('DELETE FROM app_sessions WHERE user_id = $1', [id]);
+    if (pinHash !== u.pin_hash || role !== u.role || !active) {
+      await getPool().query('DELETE FROM app_sessions WHERE user_id = $1', [id]);
+      await forgetDevices(id);
+    }
     const changes = [
       name !== u.name && `name → ${name}`,
       role !== u.role && `role → ${role}`,
@@ -184,7 +188,9 @@ export async function deleteUser(id: string, by: AppUser): Promise<void> {
 //   name            20 wrong PINs from any devices -> locked everywhere; each new lock lasts twice as
 //                   long (15 min, 30, 60 ... up to 24 h; back to 15 min after a day without locks)
 // A trusted phone (logged in before with the right PIN, gk_device cookie) skips the device and name
-// locks, so someone guessing on the venue Wi-Fi can't lock staff out; it still has its own 5-try limit.
+// locks, so someone guessing on the venue Wi-Fi can't lock staff out. Its cookie is cancelled after 5
+// wrong PINs (a stolen phone gets 5 guesses), and by a new PIN, role, switching off or unlocking.
+// Made-up names lock exactly like real ones (same limits, same answers), so locks don't say who exists.
 // Every try is counted before anything is awaited. Real names (known up front) and made-up names are
 // kept in separate lists, so a flood of made-up names can't push out the counts on real people.
 
@@ -196,6 +202,8 @@ const MAX_LOCK_MS = 24 * 3_600_000;
 const pairTries = new Map<string, Tries>(); // device|name, real names
 const madeUpTries = new Map<string, Tries>(); // device|name, made-up names (disposable)
 const nameTries = new Map<string, NameTries>(); // real names only: never evicted
+const madeUpNameTries = new Map<string, NameTries>(); // made-up names: same rules, disposable
+const tokenTries = new Map<string, Tries>(); // wrong PINs sent with a trusted-phone cookie
 const deviceTries = new Map<string, Tries>();
 let trackingCap = 10_000;
 
@@ -220,7 +228,7 @@ const forgetCache = () => {
 
 /** For tests. */
 export const resetLoginLimits = () => {
-  for (const m of [pairTries, madeUpTries, nameTries, deviceTries]) m.clear();
+  for (const m of [pairTries, madeUpTries, nameTries, madeUpNameTries, deviceTries, tokenTries]) m.clear();
   forgetCache();
 };
 /** For tests: entries kept per list before the oldest are dropped. */
@@ -278,8 +286,9 @@ function countSimple(map: Map<string, Tries>, key: string, max: number, now: num
   return lockedNow;
 }
 
-function countName(key: string, now: number): boolean {
-  const t = fresh(nameTries, key, now, () => ({ n: 0, lockedUntil: 0, level: 0, lastLockAt: 0 }));
+function countName(map: Map<string, NameTries>, key: string, now: number): boolean {
+  const t = fresh(map, key, now, () => ({ n: 0, lockedUntil: 0, level: 0, lastLockAt: 0 }));
+  if (map === madeUpNameTries) bound(map, now);
   t.n += 1;
   if (t.n < MAX_NAME_TRIES || t.lockedUntil) return false;
   t.level = now - t.lastLockAt > MAX_LOCK_MS ? 1 : t.level + 1;
@@ -291,6 +300,12 @@ function countName(key: string, now: number): boolean {
 const nameOfPair = (k: string) => k.slice(k.indexOf('|') + 1);
 const WRONG = 'Wrong name or PIN.';
 const LOCKED = 'Too many wrong tries. Wait, or ask the superadmin to unlock you.';
+
+/** Cancels a person's trusted phones (new PIN, new role, switched off, unlocked). */
+async function forgetDevices(userId: string): Promise<void> {
+  await getPool().query('DELETE FROM app_devices WHERE user_id = $1', [userId]);
+  forgetCache();
+}
 
 /** Superadmin: clear a name's lock (e.g. someone was guessing at it). */
 export function unlockName(name: string): void {
@@ -314,12 +329,17 @@ export async function login(
 
   // ---- from here to the first await below: no awaits, so tries sent at once are all counted
   const userId = names.get(key);
-  const trusted = !!userId && !!deviceToken && deviceToken.length <= 100 && devices.get(sha256(deviceToken)) === userId;
+  const tokenHash = deviceToken && deviceToken.length <= 100 ? sha256(deviceToken) : null;
+  const trusted = !!userId && !!tokenHash && devices.get(tokenHash) === userId;
   const pairs = userId ? pairTries : madeUpTries;
+  const namesMap = userId ? nameTries : madeUpNameTries;
   if (isLocked(pairs.get(pair), now)) throw new AccountError(LOCKED, 429);
-  if (!trusted && (isLocked(deviceTries.get(device), now) || (userId && isLocked(nameTries.get(key), now)))) throw new AccountError(LOCKED, 429);
+  if (!trusted && (isLocked(deviceTries.get(device), now) || isLocked(namesMap.get(key), now))) throw new AccountError(LOCKED, 429);
   const pairLocked = countSimple(pairs, pair, MAX_TRIES, now);
-  const nameLocked = userId && !trusted ? countName(key, now) : false;
+  const nameLocked = countName(namesMap, key, now); // trusted phones' wrong PINs count too (the lock just doesn't stop them)
+  // A trusted cookie gets 5 wrong PINs in all, wherever they come from; then it's cancelled.
+  const tokenSpent = trusted ? countSimple(tokenTries, tokenHash!, MAX_TRIES, now) : false;
+  if (tokenSpent) devices.delete(tokenHash!);
   if (!trusted) countSimple(deviceTries, device, MAX_DEVICE_TRIES, now);
   // ----
 
@@ -328,9 +348,15 @@ export async function login(
   // Hash even for unknown names, so the time taken doesn't say who exists.
   const ok = u ? await verifyPin(pin, u.pin_hash) : (await verifyPin(pin, DUMMY_HASH), false);
   if (!ok || !u.active) {
+    if (tokenSpent) {
+      await getPool().query('DELETE FROM app_devices WHERE token_hash = $1', [tokenHash]);
+      tokenTries.delete(tokenHash!);
+      await audit(null, 'device_cancelled', `${key}: 5 wrong PINs on a trusted phone`).catch(() => undefined);
+    }
     if (u && (pairLocked || nameLocked)) await audit(null, 'login_locked', `${key}${nameLocked ? ' (all devices)' : ''}`).catch(() => undefined);
     throw new AccountError(WRONG, 401);
   }
+  if (tokenHash) tokenTries.delete(tokenHash);
   // Right PIN: give the tries back (the name keeps its lock level for a day).
   pairTries.delete(pair);
   const nt = nameTries.get(key);
