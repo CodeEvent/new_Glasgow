@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { Router, type NextFunction, type Request, type Response } from 'express';
+import express, { Router, type NextFunction, type Request, type Response } from 'express';
 import { getConfig } from '../config/env';
 import {
   AccountError,
@@ -14,6 +14,7 @@ import {
   sessionUser,
   updateUser,
 } from '../services/accounts';
+import { LogError, checkSeat, describeWithAi, logIncident, logOptions, scanTicket, searchRecords } from '../services/appLog';
 import { can, type Action, type AppUser } from '../services/permissions';
 
 /**
@@ -26,21 +27,32 @@ const COOKIE = 'gk_session';
 
 type AuthedRequest = Request & { user: AppUser; token: string };
 
-function cookieToken(req: Request): string | undefined {
+const DEVICE_COOKIE = 'gk_device'; // this phone has logged in with the right PIN before (see accounts.ts)
+
+function cookieToken(req: Request, name = COOKIE): string | undefined {
   for (const part of (req.get('cookie') ?? '').split(';')) {
     const [k, ...v] = part.trim().split('=');
-    if (k === COOKIE) return decodeURIComponent(v.join('='));
+    if (k === name) {
+      try {
+        return decodeURIComponent(v.join('='));
+      } catch {
+        return undefined;
+      }
+    }
   }
   return undefined;
 }
 
-function setSession(req: Request, res: Response, token: string) {
-  res.cookie(COOKIE, token, { httpOnly: true, sameSite: 'strict', secure: req.secure, path: '/', maxAge: SESSION_HOURS * 3_600_000 });
+function setSession(req: Request, res: Response, s: { token: string; deviceToken: string }) {
+  const base = { httpOnly: true, sameSite: 'strict' as const, secure: req.secure, path: '/' };
+  res.cookie(COOKIE, s.token, { ...base, maxAge: SESSION_HOURS * 3_600_000 });
+  res.cookie(DEVICE_COOKIE, s.deviceToken, { ...base, maxAge: 90 * 24 * 3_600_000 });
 }
 
 // Changes only as JSON (blocks cross-site form posts).
 appApiRouter.use((req, res, next) => {
-  if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'DELETE' && !req.is('application/json')) {
+  const photo = req.path === '/scan-ticket' && req.is('image/*'); // a ticket photo (a cross-site form can't send this type)
+  if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'DELETE' && !req.is('application/json') && !photo) {
     res.status(415).json({ ok: false, error: 'Send JSON' });
     return;
   }
@@ -51,7 +63,7 @@ const wrap =
   (fn: (req: Request, res: Response) => Promise<void>) =>
   (req: Request, res: Response, next: NextFunction) =>
     fn(req, res).catch((err) => {
-      if (err instanceof AccountError) {
+      if (err instanceof AccountError || err instanceof LogError) {
         res.status(err.status).json({ ok: false, error: err.message });
         return;
       }
@@ -97,8 +109,7 @@ appApiRouter.post(
     }
     const user = await createUser({ name: req.body?.name, role: 'superadmin', pin: req.body?.pin }, null);
     await audit(user, 'setup', `${user.name} set up the app`);
-    const { token } = await login(user.name, req.body?.pin);
-    setSession(req, res, token);
+    setSession(req, res, await login(user.name, req.body?.pin, Date.now(), req.ip ?? 'unknown'));
     res.json({ ok: true, user });
   }),
 );
@@ -106,8 +117,9 @@ appApiRouter.post(
 appApiRouter.post(
   '/login',
   wrap(async (req, res) => {
-    const { user, token } = await login(req.body?.name, req.body?.pin, Date.now(), req.ip ?? 'unknown');
-    setSession(req, res, token);
+    const session = await login(req.body?.name, req.body?.pin, Date.now(), req.ip ?? 'unknown', cookieToken(req, DEVICE_COOKIE));
+    setSession(req, res, session);
+    const user = session.user;
     res.json({ ok: true, user });
   }),
 );
@@ -157,5 +169,56 @@ appApiRouter.delete(
   wrap(async (req, res) => {
     await deleteUser(String(req.params.id), (req as AuthedRequest).user);
     res.json({ ok: true });
+  }),
+);
+
+// ---------------------------------------------------------------- logging and checking
+
+const userOf = (req: Request) => (req as AuthedRequest).user;
+
+appApiRouter.get('/options', allow('view'), (_req, res) => {
+  res.json({ ok: true, ...logOptions() });
+});
+
+appApiRouter.post(
+  '/logs',
+  allow(),
+  wrap(async (req, res) => {
+    res.json({ ok: true, ...(await logIncident(userOf(req), req.body)) });
+  }),
+);
+
+appApiRouter.get(
+  '/seat',
+  allow('view'),
+  wrap(async (req, res) => {
+    const record = await checkSeat(req.query);
+    res.json({ ok: true, found: !!record, record });
+  }),
+);
+
+appApiRouter.get(
+  '/search',
+  allow('view'),
+  wrap(async (req, res) => {
+    res.json({ ok: true, records: await searchRecords(req.query.q) });
+  }),
+);
+
+appApiRouter.post(
+  '/describe',
+  allow(),
+  wrap(async (req, res) => {
+    res.json({ ok: true, fields: await describeWithAi(req.body?.text, userOf(req)) });
+  }),
+);
+
+appApiRouter.post(
+  '/scan-ticket',
+  allow(),
+  express.raw({ type: 'image/*', limit: '8mb' }),
+  wrap(async (req, res) => {
+    if (!Buffer.isBuffer(req.body) || !req.body.length) throw new LogError('Send a photo of the ticket.', 415);
+    res.json({ ok: true, ...(await scanTicket(req.body)) });
   }),
 );

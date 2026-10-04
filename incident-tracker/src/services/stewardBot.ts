@@ -4,6 +4,7 @@ import { addNote, getNotes, listRecords, recordsToCsv, updateRecord, type Record
 import type { AiContext, AiHelper, AiResult } from './aiAgent';
 import { getSetting, setSetting } from '../channels/pgAuthState';
 import { briefText, currentStats } from './nightReport';
+import { addReentryReason } from './reentry';
 import { HUBS, type Hub } from '../domain';
 import { parseGroupMessage } from './commandParser';
 import { formatClock, minutesUntil, sanitize } from './format';
@@ -1406,25 +1407,6 @@ export function parsePartialSeat(text: string): { section: string; row?: string;
 /** Words that mean the steward has already decided: refused, sent away (30 min) or ejected. */
 const DECISION_WORDS =
   /\b(refus\w*|turned (him|her|them) away|turned away|not let (him|her|them) in|denied|sent (him|her|them) away|sent away|send (him|her|them) away|30 ?min\w*|thirty minutes|cool(ing)?[- ]?off|come back later|eject\w*|thrown out|threw (him|her|them) out|kicked out|removed)\b/i;
-
-/** "Intoxicated, Already refused, tried re-entry" -> its reasons (the re-entry one has a lower-case "tried"). */
-function splitReasons(reasoning: string | null | undefined): string[] {
-  if (!reasoning || reasoning === 'Not provided') return [];
-  return reasoning.split(/,\s*(?=[A-Z])/).map((r) => r.trim()).filter(Boolean);
-}
-
-/**
- * A re-entry attempt: add "Already refused, tried re-entry" (or "sent away") and any new reasons
- * to the existing record, without repeats. Returns the new reasoning.
- */
-async function addReentryReason(ticketId: string, current: string, previousStatus: string, newReasons?: string): Promise<string> {
-  const label = previousStatus === 'cooling_off' ? 'Already sent away, tried re-entry' : 'Already refused, tried re-entry';
-  const merged = splitReasons(current);
-  for (const r of [label, ...splitReasons(newReasons)]) if (!merged.includes(r)) merged.push(r);
-  const text = merged.join(', ').slice(0, 2000);
-  if (text !== current) await getPool().query('UPDATE tickets SET reasoning = $2 WHERE ticket_id = $1', [ticketId, text]);
-  return text;
-}
 
 /** All seats of a log: one, a row list ("205 206 207"), or seats across rows from a ticket. */
 function seatList(p: Pending): SeatRef[] {

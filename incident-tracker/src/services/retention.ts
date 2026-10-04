@@ -11,6 +11,8 @@ export async function purgeExpired(hours = getConfig().RETENTION_HOURS): Promise
     `DELETE FROM tickets WHERE updated_at < NOW() - make_interval(hours => $1)`,
     [hours],
   );
+  // The app's saved results of sent logs hold seats too.
+  await getPool().query(`DELETE FROM app_log_requests WHERE created_at < NOW() - make_interval(hours => $1)`, [hours]);
   return rowCount ?? 0;
 }
 

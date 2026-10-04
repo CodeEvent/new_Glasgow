@@ -4,7 +4,7 @@ import { createApp } from '../src/app';
 import { resetConfigCache } from '../src/config/env';
 import { closePool, getPool } from '../src/db/pool';
 import { can, type AppUser } from '../src/services/permissions';
-import { deviceKey, hashPin, resetLoginLimits, setLoginTrackingCap, verifyPin } from '../src/services/accounts';
+import { deviceKey, hashPin, login, resetLoginLimits, setLoginTrackingCap, verifyPin } from '../src/services/accounts';
 import { HAS_DB, resetDatabase, tempOfflineLog } from './helpers';
 
 const area = (hub: string, id = 'a1'): AppUser => ({ id, name: 'Amy', role: 'area', hub });
@@ -55,7 +55,7 @@ describe.skipIf(!HAS_DB)('accounts API (PostgreSQL)', () => {
     process.env.ADMIN_API_KEY = KEY;
     resetConfigCache();
     await resetDatabase();
-    await getPool().query('DELETE FROM app_sessions; DELETE FROM app_users; DELETE FROM audit_log');
+    await getPool().query('DELETE FROM app_sessions; DELETE FROM app_devices; DELETE FROM app_users; DELETE FROM audit_log');
     resetLoginLimits();
   });
   afterAll(async () => {
@@ -179,11 +179,65 @@ describe.skipIf(!HAS_DB)('accounts API (PostgreSQL)', () => {
     expect((await from('10.1.0.99', '246813')).status).toBe(200);
   });
 
-  it('a busy shared connection never blocks the right PIN', async () => {
-    await setupSuperadmin();
+  it('a connection that guesses at many names is stopped, but staff phones on it still log in', async () => {
+    const gio = await setupSuperadmin();
+    // Gio's phone has logged in before on the shared Wi-Fi (it carries the trusted-device cookie).
+    const gioPhone = request.agent(app);
+    await json(gioPhone.post('/api/app/login').set('x-forwarded-for', '10.9.9.9')).send({ name: 'Gio', pin: '482913' });
+    for (const name of ['Amy', 'Bob', 'Cat', 'Dan', 'Eve', 'Fay']) await json(gio.post('/api/app/users')).send({ name, role: 'area', hub: 'West Hub', pin: '246813' });
     const from = (name: string, pin: string) => json(request(app).post('/api/app/login').set('x-forwarded-for', '10.9.9.9')).send({ name, pin });
-    for (let i = 0; i < 35; i++) await from(`Name${i}`, '000000');
-    expect((await from('Gio', '482913')).status).toBe(200);
+    for (const name of ['Amy', 'Bob', 'Cat', 'Dan', 'Eve', 'Fay']) for (let i = 0; i < 5; i++) await from(name, '000000');
+    expect((await from('Gio', '482913')).status).toBe(429); // a stranger on that connection: stopped
+    expect((await json(gioPhone.post('/api/app/login').set('x-forwarded-for', '10.9.9.9')).send({ name: 'Gio', pin: '482913' })).status).toBe(200);
+  });
+
+  it('a trusted phone still logs in while its name is locked everywhere', async () => {
+    const gio = await setupSuperadmin();
+    await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '246813' });
+    const amyPhone = request.agent(app);
+    expect((await json(amyPhone.post('/api/app/login')).send({ name: 'Amy', pin: '246813' })).headers['set-cookie']?.join(';')).toMatch(/gk_device=[^;]+;.*HttpOnly/i);
+    for (let d = 0; d < 4; d++) for (let i = 0; i < 5; i++) await json(request(app).post('/api/app/login').set('x-forwarded-for', `10.2.0.${d}`)).send({ name: 'Amy', pin: '000000' });
+    expect((await json(request(app).post('/api/app/login').set('x-forwarded-for', '10.2.0.50')).send({ name: 'Amy', pin: '246813' })).status).toBe(429);
+    expect((await json(amyPhone.post('/api/app/login')).send({ name: 'Amy', pin: '246813' })).status).toBe(200);
+  });
+
+  it('each new lock on a name lasts twice as long', async () => {
+    await setupSuperadmin();
+    const t0 = Date.now();
+    const guess = async (at: number, d: number) => {
+      for (let i = 0; i < 5; i++) await login('Gio', '000000', at, `10.3.${d}.${i}`).catch(() => undefined);
+    };
+    for (let d = 0; d < 4; d++) await guess(t0, d); // 20 wrong: locked 15 min
+    await expect(login('Gio', '482913', t0 + 10 * 60_000, '10.3.9.1')).rejects.toMatchObject({ status: 429 });
+    await expect(login('Gio', '482913', t0 + 16 * 60_000, '10.3.9.1')).resolves.toBeTruthy(); // over; a right PIN doesn't reset the level
+    const t1 = t0 + 17 * 60_000;
+    for (let d = 0; d < 4; d++) await guess(t1, d + 10); // 2nd lock: 30 min
+    await expect(login('Gio', '482913', t1 + 20 * 60_000, '10.3.9.2')).rejects.toMatchObject({ status: 429 });
+    await expect(login('Gio', '482913', t1 + 31 * 60_000, '10.3.9.3')).resolves.toBeTruthy();
+  });
+
+  it('made-up names can’t push out a guesser’s counts on a real name', async () => {
+    await setupSuperadmin();
+    setLoginTrackingCap(5);
+    try {
+      const from = (name: string, ip: string) => json(request(app).post('/api/app/login').set('x-forwarded-for', ip)).send({ name, pin: '000000' });
+      for (let i = 0; i < 4; i++) await from('Gio', '10.4.0.1');
+      for (let i = 0; i < 20; i++) await from(`Fake${i}`, `10.4.1.${i}`);
+      expect((await from('Gio', '10.4.0.1')).status).toBe(401); // 5th try
+      expect((await from('Gio', '10.4.0.1')).status).toBe(429); // still counted: locked
+    } finally {
+      setLoginTrackingCap(10_000);
+    }
+  });
+
+  it('old short PINs must be reset; promoting someone needs a new PIN', async () => {
+    const gio = await setupSuperadmin();
+    const amy = (await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '246813' })).body.user;
+    await getPool().query('UPDATE app_users SET pin_hash = $2 WHERE id = $1', [amy.id, await hashPin('2468')]);
+    const r = await json(request(app).post('/api/app/login')).send({ name: 'Amy', pin: '2468' });
+    expect(r.status).toBe(403);
+    expect(r.body.error).toMatch(/new 6/i);
+    expect((await json(gio.patch(`/api/app/users/${amy.id}`)).send({ role: 'senior' })).body.error).toMatch(/new .*PIN/i);
   });
 
   it('counts a device’s tries even when they arrive at once', async () => {

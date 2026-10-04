@@ -102,6 +102,7 @@ export async function createUser(input: { name?: unknown; role?: unknown; hub?: 
       'INSERT INTO app_users (name, name_key, role, hub, pin_hash) VALUES ($1, $2, $3, $4, $5) RETURNING *',
       [name, nameKey(name), role, role === 'area' ? hub : null, pinHash],
     );
+    forgetCache();
     return publicUser(rows[0]);
   } catch (err) {
     if ((err as { code?: string }).code === '23505') throw new AccountError(`There’s already someone called ${name}.`);
@@ -140,6 +141,7 @@ export async function updateUser(
     throw new AccountError('That’s the last superadmin: add another superadmin first.');
   }
   const newPin = input.pin !== undefined && input.pin !== '';
+  if (!newPin && u.role === 'area' && role !== 'area') throw new AccountError('Promoting someone to admin needs a new PIN for them.');
   const pinHash = newPin ? await hashPin(checkPin(input.pin)) : u.pin_hash;
   try {
     const { rows } = await getPool().query<UserRow>(
@@ -155,6 +157,7 @@ export async function updateUser(
       pinHash !== u.pin_hash && 'new PIN',
       active !== u.active && (active ? 'switched on' : 'switched off'),
     ].filter(Boolean);
+    forgetCache();
     await audit(by, 'user_changed', `${u.name}: ${changes.join(', ') || 'no change'}`);
     return publicUser(rows[0]);
   } catch (err) {
@@ -167,6 +170,7 @@ export async function deleteUser(id: string, by: AppUser): Promise<void> {
   const u = await getUserRow(id);
   if (u.role === 'superadmin' && (await activeSuperadmins(u.id)) === 0) throw new AccountError('That’s the last superadmin: add another superadmin first.');
   await getPool().query('DELETE FROM app_users WHERE id = $1', [id]);
+  forgetCache();
   await audit(by, 'user_removed', u.name);
 }
 
@@ -174,27 +178,50 @@ export async function deleteUser(id: string, by: AppUser): Promise<void> {
 
 // ---------------------------------------------------------------- login limits
 //
-//   name + device   5 wrong PINs -> that name is locked on that device (a stranger only locks themselves)
-//   name            20 wrong PINs from any devices -> the name is locked everywhere (superadmin can unlock)
-//   device          30 wrong PINs -> that device can't try made-up names; a right PIN is never blocked
-// Every try is counted before anything is awaited, so tries sent at once can't slip past the limits.
-// Memory is capped: the oldest entries go first, except running locks on real people's names.
+// Strangers (a phone that has never logged in as that person):
+//   name + device   5 wrong PINs -> that name is locked on that device
+//   device          30 wrong PINs across all names -> that device is stopped
+//   name            20 wrong PINs from any devices -> locked everywhere; each new lock lasts twice as
+//                   long (15 min, 30, 60 ... up to 24 h; back to 15 min after a day without locks)
+// A trusted phone (logged in before with the right PIN, gk_device cookie) skips the device and name
+// locks, so someone guessing on the venue Wi-Fi can't lock staff out; it still has its own 5-try limit.
+// Every try is counted before anything is awaited. Real names (known up front) and made-up names are
+// kept in separate lists, so a flood of made-up names can't push out the counts on real people.
 
 type Tries = { n: number; lockedUntil: number };
+type NameTries = Tries & { level: number; lastLockAt: number };
 const MAX_NAME_TRIES = 20;
 const MAX_DEVICE_TRIES = 30;
-const pairTries = new Map<string, Tries>();
-const nameTries = new Map<string, Tries>();
+const MAX_LOCK_MS = 24 * 3_600_000;
+const pairTries = new Map<string, Tries>(); // device|name, real names
+const madeUpTries = new Map<string, Tries>(); // device|name, made-up names (disposable)
+const nameTries = new Map<string, NameTries>(); // real names only: never evicted
 const deviceTries = new Map<string, Tries>();
-const knownNames = new Set<string>();
 let trackingCap = 10_000;
+
+// Real names and trusted phones, kept in memory so the limits above need no await.
+let cache: Promise<{ names: Map<string, string>; devices: Map<string, string> }> | null = null;
+function loadCache() {
+  cache ??= (async () => {
+    const [u, d] = await Promise.all([
+      getPool().query<{ id: string; name_key: string }>('SELECT id, name_key FROM app_users WHERE active'),
+      getPool().query<{ token_hash: string; user_id: string }>("SELECT token_hash, user_id FROM app_devices WHERE last_used_at > NOW() - INTERVAL '90 days'"),
+    ]);
+    return { names: new Map(u.rows.map((r) => [r.name_key, r.id])), devices: new Map(d.rows.map((r) => [r.token_hash, r.user_id])) };
+  })().catch((err) => {
+    cache = null;
+    throw err;
+  });
+  return cache;
+}
+const forgetCache = () => {
+  cache = null;
+};
 
 /** For tests. */
 export const resetLoginLimits = () => {
-  pairTries.clear();
-  nameTries.clear();
-  deviceTries.clear();
-  knownNames.clear();
+  for (const m of [pairTries, madeUpTries, nameTries, deviceTries]) m.clear();
+  forgetCache();
 };
 /** For tests: entries kept per list before the oldest are dropped. */
 export const setLoginTrackingCap = (n: number) => {
@@ -216,42 +243,54 @@ export function deviceKey(ip: string): string {
   return `${full.slice(0, 4).map((x) => (x || '0').replace(/^0+(?=.)/, '')).join(':')}::/64`;
 }
 
-function live(map: Map<string, Tries>, key: string, now: number): Tries {
-  const t = map.get(key);
-  if (!t || (t.lockedUntil && t.lockedUntil <= now)) return { n: 0, lockedUntil: 0 };
+const isLocked = (t: Tries | undefined, now: number) => !!t && t.lockedUntil > now;
+
+/** The entry to count into, starting again once a lock has run out. */
+function fresh<T extends Tries>(map: Map<string, T>, key: string, now: number, init: () => T): T {
+  let t = map.get(key);
+  if (!t) t = init();
+  else if (t.lockedUntil && t.lockedUntil <= now) Object.assign(t, { n: 0, lockedUntil: 0 });
+  map.delete(key); // re-insert: newest last
+  map.set(key, t);
   return t;
 }
-const isLocked = (map: Map<string, Tries>, key: string, now: number) => live(map, key, now).lockedUntil > now;
 
-/** Drops the oldest entries once a list is over the cap; `keep` protects running locks on real names. */
-function bound(map: Map<string, Tries>, now: number, keep: (key: string, t: Tries) => boolean) {
+/** Oldest first: entries without a running lock, then (past a hard limit) any. */
+function bound(map: Map<string, Tries>, now: number) {
   if (map.size <= trackingCap) return;
   const target = Math.floor(trackingCap * 0.9);
   for (const [k, t] of map) {
     if (map.size <= target) break;
-    if (!(t.lockedUntil > now && keep(k, t))) map.delete(k);
+    if (!isLocked(t, now)) map.delete(k);
   }
-  // Still over a hard limit (a huge flood of locks): drop the oldest regardless.
   for (const k of map.keys()) {
     if (map.size <= trackingCap * 5) break;
     map.delete(k);
   }
 }
 
-function count(map: Map<string, Tries>, key: string, max: number, now: number, keep: (key: string) => boolean): boolean {
-  const t = live(map, key, now);
+function countSimple(map: Map<string, Tries>, key: string, max: number, now: number): boolean {
+  const t = fresh(map, key, now, () => ({ n: 0, lockedUntil: 0 }));
   t.n += 1;
   const lockedNow = t.n >= max && !t.lockedUntil;
-  if (t.n >= max) t.lockedUntil = t.lockedUntil || now + LOCK_MS;
-  map.delete(key); // re-insert: newest last
-  map.set(key, t);
-  bound(map, now, keep);
+  if (lockedNow) t.lockedUntil = now + LOCK_MS;
+  bound(map, now);
   return lockedNow;
+}
+
+function countName(key: string, now: number): boolean {
+  const t = fresh(nameTries, key, now, () => ({ n: 0, lockedUntil: 0, level: 0, lastLockAt: 0 }));
+  t.n += 1;
+  if (t.n < MAX_NAME_TRIES || t.lockedUntil) return false;
+  t.level = now - t.lastLockAt > MAX_LOCK_MS ? 1 : t.level + 1;
+  t.lastLockAt = now;
+  t.lockedUntil = now + Math.min(LOCK_MS * 2 ** (t.level - 1), MAX_LOCK_MS);
+  return true;
 }
 
 const nameOfPair = (k: string) => k.slice(k.indexOf('|') + 1);
 const WRONG = 'Wrong name or PIN.';
-const LOCKED = 'Too many wrong tries. Wait 15 minutes, or ask the superadmin.';
+const LOCKED = 'Too many wrong tries. Wait, or ask the superadmin to unlock you.';
 
 /** Superadmin: clear a name's lock (e.g. someone was guessing at it). */
 export function unlockName(name: string): void {
@@ -260,34 +299,46 @@ export function unlockName(name: string): void {
   for (const k of pairTries.keys()) if (nameOfPair(k) === key) pairTries.delete(k);
 }
 
-export async function login(nameIn: unknown, pinIn: unknown, now = Date.now(), ip = 'unknown'): Promise<{ user: PublicUser; token: string }> {
+export async function login(
+  nameIn: unknown,
+  pinIn: unknown,
+  now = Date.now(),
+  ip = 'unknown',
+  deviceToken?: string,
+): Promise<{ user: PublicUser; token: string; deviceToken: string }> {
   const key = nameKey(String(nameIn ?? '')).slice(0, 60);
   const pin = String(pinIn ?? '').slice(0, 16);
   const device = deviceKey(ip);
   const pair = `${device}|${key}`;
-  if (isLocked(pairTries, pair, now) || isLocked(nameTries, key, now)) throw new AccountError(LOCKED, 429);
-  const deviceLocked = isLocked(deviceTries, device, now);
+  const { names, devices } = await loadCache();
 
-  // Count this try now, before any await; a right PIN takes it back below.
-  const real = (k: string) => knownNames.has(k);
-  const pairLocked = count(pairTries, pair, MAX_TRIES, now, (k) => real(nameOfPair(k)));
-  const nameLocked = count(nameTries, key, MAX_NAME_TRIES, now, real);
-  count(deviceTries, device, MAX_DEVICE_TRIES, now, () => false);
+  // ---- from here to the first await below: no awaits, so tries sent at once are all counted
+  const userId = names.get(key);
+  const trusted = !!userId && !!deviceToken && deviceToken.length <= 100 && devices.get(sha256(deviceToken)) === userId;
+  const pairs = userId ? pairTries : madeUpTries;
+  if (isLocked(pairs.get(pair), now)) throw new AccountError(LOCKED, 429);
+  if (!trusted && (isLocked(deviceTries.get(device), now) || (userId && isLocked(nameTries.get(key), now)))) throw new AccountError(LOCKED, 429);
+  const pairLocked = countSimple(pairs, pair, MAX_TRIES, now);
+  const nameLocked = userId && !trusted ? countName(key, now) : false;
+  if (!trusted) countSimple(deviceTries, device, MAX_DEVICE_TRIES, now);
+  // ----
 
   const { rows } = await getPool().query<UserRow>('SELECT * FROM app_users WHERE name_key = $1', [key]);
   const u = rows[0];
-  if (u) knownNames.add(key);
-  if (!u && deviceLocked) throw new AccountError(WRONG, 401); // a device spraying made-up names: don't spend the CPU
   // Hash even for unknown names, so the time taken doesn't say who exists.
   const ok = u ? await verifyPin(pin, u.pin_hash) : (await verifyPin(pin, DUMMY_HASH), false);
   if (!ok || !u.active) {
     if (u && (pairLocked || nameLocked)) await audit(null, 'login_locked', `${key}${nameLocked ? ' (all devices)' : ''}`).catch(() => undefined);
     throw new AccountError(WRONG, 401);
   }
+  // Right PIN: give the tries back (the name keeps its lock level for a day).
   pairTries.delete(pair);
-  nameTries.delete(key);
+  const nt = nameTries.get(key);
+  if (nt && !isLocked(nt, now)) nt.n = 0;
   const d = deviceTries.get(device);
-  if (d && !d.lockedUntil) d.n = Math.max(0, d.n - 1);
+  if (d && !isLocked(d, now)) d.n = Math.max(0, d.n - 1);
+  if (pin.length < 6) throw new AccountError('PINs are 6 digits now: ask the superadmin for a new 6-digit PIN.', 403);
+
   const token = crypto.randomBytes(32).toString('base64url');
   await getPool().query('INSERT INTO app_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)', [
     sha256(token),
@@ -296,7 +347,15 @@ export async function login(nameIn: unknown, pinIn: unknown, now = Date.now(), i
   ]);
   await getPool().query('UPDATE app_users SET last_login_at = $2 WHERE id = $1', [u.id, new Date(now)]);
   await getPool().query('DELETE FROM app_sessions WHERE expires_at < $1', [new Date(now)]);
-  return { user: publicUser(u), token };
+  // This phone is now trusted for this person.
+  const device_ = trusted ? deviceToken! : crypto.randomBytes(32).toString('base64url');
+  if (trusted) {
+    await getPool().query('UPDATE app_devices SET last_used_at = $2 WHERE token_hash = $1', [sha256(device_), new Date(now)]);
+  } else {
+    await getPool().query('INSERT INTO app_devices (token_hash, user_id) VALUES ($1, $2)', [sha256(device_), u.id]);
+    devices.set(sha256(device_), u.id);
+  }
+  return { user: publicUser(u), token, deviceToken: device_ };
 }
 
 const DUMMY_HASH = `scrypt$${Buffer.alloc(16).toString('base64')}$${Buffer.alloc(32).toString('base64')}`;
