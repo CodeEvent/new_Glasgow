@@ -5,6 +5,7 @@ import { hasPendingOfflineIncidents } from './services/offlineBuffer';
 import { scanRouter } from './routes/scan';
 import { whatsappWebhookRouter } from './routes/whatsappWebhook';
 import { adminRouter } from './routes/admin';
+import { appApiRouter } from './routes/appApi';
 
 /** `extend` mounts extra routes (e.g. the demo console) ahead of the static files and 404 handler. */
 export function createApp(opts: { extend?: (app: express.Express) => void } = {}) {
@@ -42,6 +43,7 @@ export function createApp(opts: { extend?: (app: express.Express) => void } = {}
     }
   });
 
+  app.use('/api/app', appApiRouter);
   app.use('/api', scanRouter);
   app.use('/api/whatsapp', whatsappWebhookRouter);
   app.use('/admin', adminRouter);

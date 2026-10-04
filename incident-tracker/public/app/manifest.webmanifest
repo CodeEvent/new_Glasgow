@@ -1,0 +1,12 @@
+{
+  "name": "Gatekeeper",
+  "short_name": "Gatekeeper",
+  "description": "Log refusals, sent-away and ejections at the Hydro, and see them live.",
+  "start_url": "/app/",
+  "scope": "/app/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [{ "src": "/app/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

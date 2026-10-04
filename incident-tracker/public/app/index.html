@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Gatekeeper">
+<title>Gatekeeper</title>
+<link rel="manifest" href="/app/manifest.webmanifest">
+<link rel="icon" href="/app/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/app/icon.svg">
+<link rel="stylesheet" href="/app/app.css">
+</head>
+<body>
+<header class="top" id="top" hidden>
+  <div class="brand"><img src="/app/icon.svg" alt=""><span>Gatekeeper</span></div>
+  <div class="who"><span id="whoName"></span><span class="badge" id="whoRole"></span></div>
+  <button class="link" id="logoutBtn" type="button">Log out</button>
+</header>
+
+<main id="view" aria-live="polite"></main>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<!-- First run: the person with the server's admin key creates the superadmin. -->
+<template id="tpl-setup">
+  <section class="card narrow">
+    <h1>Set up Gatekeeper</h1>
+    <p class="muted">First time only. You’ll be the <strong>superadmin</strong>: you add everyone else.</p>
+    <form id="setupForm" autocomplete="off">
+      <label>Admin key <span class="muted">(printed when the server was installed)</span>
+        <input name="admin_key" type="password" required autocomplete="off"></label>
+      <label>Your name <input name="name" required maxlength="40" autocomplete="name"></label>
+      <label>Choose a PIN <span class="muted">(6–8 digits)</span>
+        <input name="pin" type="password" inputmode="numeric" pattern="\d{6,8}" required autocomplete="new-password"></label>
+      <label>PIN again <input name="pin2" type="password" inputmode="numeric" pattern="\d{6,8}" required autocomplete="new-password"></label>
+      <p class="error" data-error hidden></p>
+      <button class="primary big" type="submit">Create superadmin</button>
+    </form>
+  </section>
+</template>
+
+<template id="tpl-login">
+  <section class="card narrow login">
+    <img class="logo" src="/app/icon.svg" alt="">
+    <h1>Gatekeeper</h1>
+    <form id="loginForm" autocomplete="off">
+      <label>Your name <input name="name" required maxlength="40" autocomplete="username" autocapitalize="words"></label>
+      <div class="pin-dots" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <input name="pin" type="hidden">
+      <div class="keypad" role="group" aria-label="PIN">
+        <button type="button" data-k="1">1</button><button type="button" data-k="2">2</button><button type="button" data-k="3">3</button>
+        <button type="button" data-k="4">4</button><button type="button" data-k="5">5</button><button type="button" data-k="6">6</button>
+        <button type="button" data-k="7">7</button><button type="button" data-k="8">8</button><button type="button" data-k="9">9</button>
+        <button type="button" data-k="del" aria-label="Delete">⌫</button><button type="button" data-k="0">0</button>
+        <button type="submit" class="go" aria-label="Log in">→</button>
+      </div>
+      <p class="error" data-error hidden></p>
+    </form>
+  </section>
+</template>
+
+<template id="tpl-home">
+  <section class="home">
+    <p class="hello" data-hello></p>
+    <div class="tiles" data-tiles></div>
+  </section>
+</template>
+
+<template id="tpl-users">
+  <section class="card">
+    <div class="row-between"><h1>People</h1><button class="link" data-back type="button">← Home</button></div>
+    <ul class="people" data-list></ul>
+    <h2 data-form-title>Add someone</h2>
+    <form id="userForm" autocomplete="off">
+      <input type="hidden" name="id">
+      <label>Name <input name="name" required maxlength="40"></label>
+      <label>Role
+        <select name="role">
+          <option value="area">Area supervisor</option>
+          <option value="senior">Senior supervisor</option>
+          <option value="superadmin">Superadmin</option>
+        </select></label>
+      <p class="hint muted" data-role-hint></p>
+      <label data-hub-field>Area
+        <select name="hub">
+          <option value="East Hub">East</option><option value="West Hub">West</option>
+          <option value="South Hub">South</option><option value="Hospitality Hub">Hospitality</option>
+        </select></label>
+      <label>PIN <span class="muted" data-pin-hint>(4–8 digits; 6–8 for seniors and superadmins)</span>
+        <input name="pin" type="password" inputmode="numeric" autocomplete="new-password"></label>
+      <p class="error" data-error hidden></p>
+      <div class="row-gap">
+        <button class="primary" type="submit" data-submit>Add</button>
+        <button class="ghost" type="button" data-cancel hidden>Cancel</button>
+      </div>
+    </form>
+  </section>
+</template>
+
+<script src="/app/app.js"></script>
+</body>
+</html>
