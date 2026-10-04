@@ -16,7 +16,7 @@
 <body>
 <header class="top" id="top" hidden>
   <div class="brand"><img src="/app/icon.svg" alt=""><span>Gatekeeper</span></div>
-  <div class="who"><span id="whoName"></span><span class="badge" id="whoRole"></span></div>
+  <div class="who"><span class="queue-badge" id="queueBadge" hidden></span><span id="whoName"></span><span class="badge" id="whoRole"></span></div>
   <button class="link" id="logoutBtn" type="button">Log out</button>
 </header>
 
@@ -96,6 +96,93 @@
         <button class="ghost" type="button" data-cancel hidden>Cancel</button>
       </div>
     </form>
+  </section>
+</template>
+
+<template id="tpl-log">
+  <section class="log">
+    <div class="row-between"><h1>Log someone</h1><button class="link" data-back type="button">← Home</button></div>
+
+    <div class="block">
+      <h2>What happened?</h2>
+      <div class="seg three" data-decision>
+        <button type="button" data-v="refused" class="d-refused">🔴<span>Refused</span></button>
+        <button type="button" data-v="cool_off" class="d-away">🟠<span data-cool>30 min</span></button>
+        <button type="button" data-v="ejected" class="d-ejected">⛔<span>Ejected</span></button>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="row-between"><h2>Seat</h2>
+        <label class="scan-btn"><input type="file" accept="image/*" capture="environment" data-scan hidden>📷 Scan ticket</label></div>
+      <div class="seat-grid">
+        <label>Section<input data-section inputmode="text" autocapitalize="characters" autocomplete="off" maxlength="16" placeholder="313"></label>
+        <label>Row<input data-row inputmode="text" autocapitalize="characters" autocomplete="off" maxlength="8" placeholder="YY"></label>
+        <label>Seat<input data-seat inputmode="numeric" autocomplete="off" maxlength="80" placeholder="56"></label>
+      </div>
+      <p class="hint muted">Several seats in the row? <strong>205 206 207</strong> or <strong>205-207</strong></p>
+      <div data-seat-alert></div>
+    </div>
+
+    <div class="block">
+      <h2>Area</h2>
+      <div class="chips" data-hubs></div>
+    </div>
+
+    <div class="block">
+      <h2>Reasons <span class="muted">(one or more)</span></h2>
+      <div class="chips" data-reasons></div>
+      <label data-other hidden>What happened?<input data-other-text maxlength="300" placeholder="e.g. threw a bottle"></label>
+      <label>Something else <span class="muted">(optional)</span><input data-extra-reason maxlength="60" placeholder="e.g. trespassing"></label>
+    </div>
+
+    <div class="block">
+      <h2>Description <span class="muted">(optional)</span></h2>
+      <div data-ai hidden>
+        <label>Describe in a sentence<textarea data-ai-text rows="2" maxlength="600" placeholder="tall lad about 20, green hat, black jacket"></textarea></label>
+        <button type="button" class="ghost small" data-ai-fill>✨ Fill in the buttons</button>
+      </div>
+      <div class="chips" data-gender></div>
+      <div class="chips" data-height></div>
+      <div class="chips" data-build></div>
+      <div class="chips" data-age></div>
+      <label>Wearing<input data-clothing maxlength="300" placeholder="green hat, black jacket"></label>
+      <div class="party">People in the group
+        <button type="button" class="ghost round" data-party-minus aria-label="Fewer">−</button>
+        <strong data-party>1</strong>
+        <button type="button" class="ghost round" data-party-plus aria-label="More">+</button>
+      </div>
+    </div>
+
+    <div class="savebar">
+      <p class="hint" data-missing></p>
+      <button type="button" class="primary big" data-save disabled>Save</button>
+    </div>
+  </section>
+</template>
+
+<template id="tpl-result">
+  <section class="result" data-result>
+    <div class="result-card" data-card>
+      <p class="big-status" data-status></p>
+      <div data-lines></div>
+    </div>
+    <div class="row-gap">
+      <button type="button" class="primary big" data-again>Log another</button>
+      <button type="button" class="ghost big" data-home>Home</button>
+    </div>
+  </section>
+</template>
+
+<template id="tpl-check">
+  <section>
+    <div class="row-between"><h1>Check a seat</h1><button class="link" data-back type="button">← Home</button></div>
+    <form data-form class="search-row">
+      <input data-q autocapitalize="characters" autocomplete="off" maxlength="60" placeholder="313 YY 56 · 313 L · 313 · green hat" aria-label="Seat or words">
+      <button class="primary" type="submit">Check</button>
+    </form>
+    <p class="muted hint">A whole section (<strong>313</strong>), a row (<strong>313 L</strong>), a seat, or words from a description.</p>
+    <div data-results></div>
   </section>
 </template>
 

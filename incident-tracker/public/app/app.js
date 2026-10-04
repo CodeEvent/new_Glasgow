@@ -23,6 +23,9 @@ async function api(path, opts = {}) {
   if (res.status === 401 && !opts.allow401) {
     me = null;
     route();
+
+// Works without signal once opened: the app's files are kept on the phone.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js', { scope: '/app/' }).catch(() => undefined);
   }
   return { status: res.status, ...data };
 }
@@ -67,6 +70,7 @@ function setHeader() {
   const b = $('#whoRole');
   b.textContent = me.role === 'area' ? area(me.hub) : ROLE_LABEL[me.role];
   b.className = `badge ${me.role}`;
+  setQueue(queued());
 }
 
 // ---------------------------------------------------------------- setup and login
@@ -83,6 +87,9 @@ function setupView() {
     me = r.user;
     remember(me.name);
     route();
+
+// Works without signal once opened: the app's files are kept on the phone.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js', { scope: '/app/' }).catch(() => undefined);
   });
 }
 
@@ -135,6 +142,9 @@ function loginView() {
     me = r.user;
     remember(me.name);
     route();
+
+// Works without signal once opened: the app's files are kept on the phone.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js', { scope: '/app/' }).catch(() => undefined);
   });
   if (nameInput.value) nameInput.blur();
   else nameInput.focus();
@@ -155,8 +165,8 @@ function homeView() {
       el('span', {}, el('strong', { text: title }), el('small', { text: sub })));
   const soon = 'Coming in the next update';
   tiles.append(
-    tile('➕', 'Log someone', me.role === 'area' ? `Refused, 30 min or ejected at ${area(me.hub)}` : 'Refused, 30 min or ejected', { wide: true }),
-    tile('🔎', 'Check a seat', soon),
+    tile('➕', 'Log someone', me.role === 'area' ? `Refused, 30 min or ejected at ${area(me.hub)}` : 'Refused, 30 min or ejected', { wide: true, go: () => go('log') }),
+    tile('🔎', 'Check a seat', 'Is this ticket on record?', { go: () => go('check') }),
     tile('📡', 'Live feed', soon),
   );
   if (isAdmin()) tiles.append(tile('📊', 'Dashboard', soon), tile('🏁', 'Events & reports', soon));
@@ -266,6 +276,385 @@ async function peopleView() {
   load();
 }
 
+// ---------------------------------------------------------------- shared bits
+
+let options = null;
+async function getOptions() {
+  if (options) return options;
+  const r = await api('/options');
+  if (r.ok) options = r;
+  return options;
+}
+
+const store = {
+  get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } },
+};
+
+function uuid() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+const clock = (iso) => (iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '');
+const minsUntil = (iso) => Math.max(0, Math.ceil((new Date(iso).getTime() - Date.now()) / 60000));
+const STATUS = { refused: 'REFUSED', sent_away: 'SENT AWAY', ejected: 'EJECTED', admitted: 'CLEARED' };
+
+/** "56", "205 206 207", "205-207", "205,206" -> seat numbers (max 20). */
+function parseSeats(text) {
+  const out = [];
+  for (const part of text.toUpperCase().split(/[\s,]+/).filter(Boolean)) {
+    const range = /^(\d{1,4})-(\d{1,4})$/.exec(part);
+    if (range) {
+      const [a, b] = [Number(range[1]), Number(range[2])];
+      if (b < a || b - a > 19) return null;
+      for (let n = a; n <= b; n++) out.push(String(n));
+    } else if (/^[A-Z0-9]{1,8}$/.test(part)) out.push(part);
+    else return null;
+  }
+  return out.length && out.length <= 20 ? [...new Set(out)] : null;
+}
+
+/** One-line summary of a record, for alerts and lists. */
+function recordText(r) {
+  const parts = [];
+  if (r.status === 'sent_away' && r.back_at) parts.push(minsUntil(r.back_at) ? `back ${clock(r.back_at)} (${minsUntil(r.back_at)} min)` : 'cool-off over');
+  if (r.first_hub) parts.push(`${area(r.first_hub)} ${clock(r.first_at)}`);
+  if (r.by) parts.push(`by ${r.by}`);
+  return parts.join(' · ');
+}
+
+// ---------------------------------------------------------------- offline queue
+
+const QUEUE = 'gk_queue';
+const queued = () => store.get(QUEUE, []);
+function setQueue(q) {
+  store.set(QUEUE, q);
+  const badge = $('#queueBadge');
+  if (badge) {
+    badge.hidden = !q.length;
+    badge.textContent = `${q.length} waiting`;
+  }
+}
+
+/** Sends logs saved while there was no signal. The server ignores ones it already has. */
+let flushing = false;
+async function flushQueue() {
+  if (flushing || !me) return;
+  flushing = true;
+  try {
+    let q = queued();
+    while (q.length) {
+      let res;
+      try {
+        res = await fetch('/api/app/logs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(q[0]), credentials: 'same-origin' });
+      } catch {
+        break; // still no signal
+      }
+      if (res.status === 401 || res.status >= 500) break;
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        const reentry = (data.results || []).find((x) => x.reentry);
+        toast(reentry ? `🚨 Sent: ${reentry.seat} was already on record. Do not admit.` : `Sent: ${(data.results || []).map((x) => x.seat).join(', ')}`);
+      } else {
+        toast(`Couldn’t send a saved log: ${data.error || 'rejected'}`);
+      }
+      q = queued().slice(1);
+      setQueue(q);
+    }
+  } finally {
+    flushing = false;
+  }
+}
+window.addEventListener('online', flushQueue);
+setInterval(flushQueue, 20000);
+
+// ---------------------------------------------------------------- log someone
+
+async function logView() {
+  const opts = await getOptions();
+  if (!opts) return homeView();
+  const root = show('#tpl-log');
+  $('[data-back]', root).onclick = () => go('');
+  $('[data-cool]', root).textContent = `${opts.cool_off_minutes} min`;
+
+  const state = { decision: null, hub: me.role === 'area' ? me.hub : store.get('gk_hub', null), reasons: [], gender: null, height: null, build: null, age: null, party: 1, ticket_code: null };
+  const saveBtn = $('[data-save]', root);
+  const missing = $('[data-missing]', root);
+  const [secIn, rowIn, seatIn] = ['[data-section]', '[data-row]', '[data-seat]'].map((q) => $(q, root));
+
+  // Single-choice chip rows (tap again to clear).
+  function chipRow(container, values, key, label = (v) => v, allowClear = true) {
+    const host = $(container, root);
+    host.replaceChildren(
+      ...values.map((v) =>
+        el('button', { type: 'button', 'aria-pressed': String(state[key] === v), text: label(v), onclick: (e) => {
+          state[key] = state[key] === v && allowClear ? null : v;
+          for (const b of host.children) b.setAttribute('aria-pressed', String(b === e.currentTarget && state[key] === v));
+          refresh();
+        } })),
+    );
+    return host;
+  }
+
+  // What happened
+  const decisions = $('[data-decision]', root);
+  decisions.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    state.decision = b.dataset.v;
+    for (const x of decisions.children) x.setAttribute('aria-pressed', String(x === b));
+    refresh();
+  });
+
+  // Area
+  if (me.role === 'area') $('[data-hubs]', root).replaceChildren(el('span', { class: 'fixed', text: `📍 ${area(me.hub)}` }));
+  else chipRow('[data-hubs]', opts.hubs, 'hub', area, false);
+
+  // Reasons (several)
+  const other = $('[data-other]', root);
+  const reasonsHost = $('[data-reasons]', root);
+  reasonsHost.replaceChildren(
+    ...opts.reasons.map((r) =>
+      el('button', { type: 'button', 'aria-pressed': 'false', text: r, onclick: (e) => {
+        const on = !state.reasons.includes(r);
+        state.reasons = on ? [...state.reasons, r] : state.reasons.filter((x) => x !== r);
+        e.currentTarget.setAttribute('aria-pressed', String(on));
+        other.hidden = !state.reasons.includes('Other');
+        refresh();
+      } })),
+  );
+
+  // Description
+  chipRow('[data-gender]', ['Male', 'Female'], 'gender');
+  chipRow('[data-height]', opts.heights, 'height');
+  chipRow('[data-build]', opts.builds, 'build');
+  chipRow('[data-age]', opts.ages, 'age');
+  const partyEl = $('[data-party]', root);
+  $('[data-party-minus]', root).onclick = () => { state.party = Math.max(1, state.party - 1); partyEl.textContent = state.party; };
+  $('[data-party-plus]', root).onclick = () => { state.party = Math.min(50, state.party + 1); partyEl.textContent = state.party; };
+
+  if (opts.ai) {
+    $('[data-ai]', root).hidden = false;
+    $('[data-ai-fill]', root).onclick = async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = '✨ Reading…';
+      const r = await api('/describe', { method: 'POST', body: { text: $('[data-ai-text]', root).value } });
+      btn.disabled = false;
+      btn.textContent = '✨ Fill in the buttons';
+      if (!r.ok) return toast(r.error);
+      const pick = (container, key, values, v) => {
+        if (!v) return;
+        if (!values.includes(v)) values = [...values, v]; // a word that isn't on the list: shown just for this log
+        state[key] = v;
+        chipRow(container, values, key);
+      };
+      pick('[data-gender]', 'gender', ['Male', 'Female'], r.fields.gender);
+      pick('[data-height]', 'height', opts.heights, r.fields.height);
+      pick('[data-build]', 'build', opts.builds, r.fields.build);
+      pick('[data-age]', 'age', opts.ages, r.fields.age);
+      if (r.fields.clothing) $('[data-clothing]', root).value = r.fields.clothing;
+      refresh();
+    };
+  }
+
+  // Seat: capitals, and a warning straight away if it's already on record.
+  const alertBox = $('[data-seat-alert]', root);
+  let checkTimer;
+  let checkSeq = 0;
+  for (const input of [secIn, rowIn, seatIn]) {
+    input.addEventListener('input', () => {
+      input.value = input.value.toUpperCase();
+      refresh();
+      clearTimeout(checkTimer);
+      checkTimer = setTimeout(checkSeats, 350);
+    });
+  }
+  async function checkSeats() {
+    const seats = parseSeats(seatIn.value);
+    const sec = secIn.value.trim();
+    const row = rowIn.value.trim();
+    if (!sec || !row || !seats) return alertBox.replaceChildren();
+    const seq = ++checkSeq;
+    const found = [];
+    for (const seat of seats.slice(0, 20)) {
+      const r = await api(`/seat?section=${encodeURIComponent(sec)}&row=${encodeURIComponent(row)}&seat=${encodeURIComponent(seat)}`).catch(() => null);
+      if (seq !== checkSeq) return;
+      if (r?.found) found.push(r.record);
+    }
+    alertBox.replaceChildren(
+      ...found.map((rec) => {
+        const cleared = rec.status === 'admitted';
+        return el('div', { class: `alert ${cleared ? 'ok' : rec.status === 'sent_away' ? 'warn' : 'danger'}` },
+          el('span', { text: `${cleared ? '🟢' : '⚠️'} ${rec.seat} is already ${STATUS[rec.status]}${cleared ? ' (cleared)' : ''}` }),
+          el('small', { text: [recordText(rec), rec.reasoning].filter(Boolean).join(' — ') }),
+          cleared ? null : el('small', { text: 'Saving this logs a re-entry attempt. Do not admit.' }));
+      }),
+    );
+  }
+
+  // Ticket photo: the server reads the seat (and QR code).
+  $('[data-scan]', root).addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    toast('Reading the ticket…');
+    const blob = await shrink(file).catch(() => file);
+    let r;
+    try {
+      const res = await fetch('/api/app/scan-ticket', { method: 'POST', headers: { 'content-type': blob.type || 'image/jpeg' }, body: blob, credentials: 'same-origin' });
+      r = await res.json();
+    } catch {
+      return toast('No signal: type the seat instead.');
+    }
+    if (!r.ok) return toast(r.error || 'Couldn’t read that photo.');
+    if (r.code) state.ticket_code = r.code;
+    if (!r.seats.length) return toast(r.code ? 'Ticket code read; type the seat too.' : 'Couldn’t find a seat on it: type it in.');
+    const first = r.seats[0];
+    const sameRow = r.seats.filter((x) => x.section === first.section && x.row === first.row);
+    secIn.value = first.section;
+    rowIn.value = first.row;
+    seatIn.value = sameRow.map((x) => x.seat).join(' ');
+    toast(r.seats.length > sameRow.length ? `Seats from ${first.section} ${first.row} filled in. Log the other rows separately.` : 'Seat filled in from the ticket.');
+    refresh();
+    checkSeats();
+  });
+
+  function body() {
+    const extra = $('[data-extra-reason]', root).value.split(',').map((x) => x.trim()).filter(Boolean);
+    return {
+      client_id: uuid(),
+      decision: state.decision,
+      seats: (parseSeats(seatIn.value) || []).map((seat) => ({ section: secIn.value.trim(), row: rowIn.value.trim(), seat })),
+      hub: state.hub || undefined,
+      reasons: [...state.reasons, ...extra],
+      other_reason: state.reasons.includes('Other') ? $('[data-other-text]', root).value.trim() : undefined,
+      gender: state.gender || undefined,
+      height: state.height || undefined,
+      build: state.build || undefined,
+      age: state.age || undefined,
+      clothing: $('[data-clothing]', root).value.trim() || undefined,
+      party: state.party > 1 ? state.party : undefined,
+      ticket_code: state.ticket_code || undefined,
+      occurred_at: new Date().toISOString(),
+    };
+  }
+
+  function refresh() {
+    const b = body();
+    const need = [];
+    if (!b.decision) need.push('what happened');
+    if (!secIn.value.trim() || !rowIn.value.trim() || !parseSeats(seatIn.value)) need.push('the seat');
+    if (!b.hub) need.push('the area');
+    if (!b.reasons.length) need.push('a reason');
+    else if (state.reasons.includes('Other') && !b.other_reason) need.push('what “Other” was');
+    saveBtn.disabled = need.length > 0;
+    missing.textContent = need.length ? `Still needed: ${need.join(', ')}` : '';
+    const seats = b.seats.map((x) => x.seat);
+    const word = { refused: 'REFUSED', cool_off: 'SENT AWAY', ejected: 'EJECTED' }[b.decision] || '';
+    saveBtn.textContent = need.length ? 'Save' : `Save · ${word} ${secIn.value.trim()} ${rowIn.value.trim()} ${seats.length > 3 ? `${seats.slice(0, 3).join(' ')}…` : seats.join(' ')}`;
+  }
+  $('[data-other-text]', root).addEventListener('input', refresh);
+  $('[data-extra-reason]', root).addEventListener('input', refresh);
+  refresh();
+
+  saveBtn.onclick = async () => {
+    const b = body();
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving…';
+    if (me.role !== 'area') store.set('gk_hub', b.hub);
+    let res;
+    try {
+      res = await fetch('/api/app/logs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b), credentials: 'same-origin' });
+    } catch {
+      setQueue([...queued(), b]);
+      return resultView(b, null);
+    }
+    const data = await res.json().catch(() => ({ ok: false, error: 'Something went wrong.' }));
+    if (res.status === 401) {
+      setQueue([...queued(), b]);
+      me = null;
+      toast('Log in again: your log is saved on this phone and will be sent.');
+      return route();
+
+// Works without signal once opened: the app's files are kept on the phone.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js', { scope: '/app/' }).catch(() => undefined);
+    }
+    if (!data.ok) {
+      toast(data.error);
+      return refresh();
+    }
+    resultView(b, data.results);
+  };
+}
+
+/** Makes big phone photos small enough to send quickly on poor signal. */
+async function shrink(file) {
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const canvas = Object.assign(document.createElement('canvas'), { width: Math.round(bmp.width * scale), height: Math.round(bmp.height * scale) });
+  canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('no blob'))), 'image/jpeg', 0.85));
+}
+
+function resultView(sent, results) {
+  const root = show('#tpl-result');
+  const card = $('[data-card]', root);
+  const lines = $('[data-lines]', root);
+  if (!results) {
+    card.classList.add('queued');
+    $('[data-status]', root).textContent = '📶 No signal: saved on this phone';
+    lines.append(
+      el('p', { text: `${sent.seats.map((x) => `${x.section} ${x.row} ${x.seat}`).join(', ')} will be sent automatically when there’s signal.` }),
+      el('p', { text: `Treat them as ${{ refused: 'REFUSED', cool_off: 'SENT AWAY', ejected: 'EJECTED' }[sent.decision]} now.` }),
+    );
+  } else {
+    const main = results[0];
+    card.classList.add(main.status);
+    $('[data-status]', root).textContent = `✅ ${STATUS[main.status]}`;
+    for (const r of results) {
+      lines.append(el('p', { text: `${r.seat}${r.back_at ? ` · back ${clock(r.back_at)}` : ''}` }));
+      if (r.reentry) lines.append(el('p', { class: 'reentry', text: `🚨 ${r.seat}: already on record (first at ${area(r.first_hub)} ${clock(r.first_at)}). Re-entry attempt logged. Do not admit.` }));
+    }
+    if (results.some((r) => r.offline)) lines.append(el('p', { text: 'The server’s database was busy: kept on the server and synced shortly.' }));
+  }
+  $('[data-again]', root).onclick = () => logView();
+  $('[data-home]', root).onclick = () => go('');
+  if (navigator.vibrate) navigator.vibrate(results?.some((r) => r.reentry) ? [200, 100, 200] : 80);
+}
+
+// ---------------------------------------------------------------- check a seat
+
+function checkView() {
+  const root = show('#tpl-check');
+  $('[data-back]', root).onclick = () => go('');
+  const q = $('[data-q]', root);
+  const out = $('[data-results]', root);
+  q.addEventListener('input', () => (q.value = q.value.toUpperCase()));
+  $('[data-form]', root).addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!q.value.trim()) return;
+    const r = await api(`/search?q=${encodeURIComponent(q.value.trim())}`);
+    if (!r.ok) return toast(r.error);
+    if (!r.records.length) return out.replaceChildren(el('div', { class: 'alert ok', text: `✅ Nothing on record for “${q.value.trim()}”.` }));
+    out.replaceChildren(
+      el('ul', { class: 'records' },
+        ...r.records.map((rec) =>
+          el('li', { class: rec.status },
+            el('div', {}, el('span', { class: 'seat', text: rec.seat }), el('span', { class: 'tag', text: STATUS[rec.status] })),
+            rec.reasoning ? el('div', { text: rec.reasoning }) : null,
+            rec.description ? el('div', { text: `👤 ${rec.description}` }) : null,
+            el('small', { text: [recordText(rec), rec.party > 1 ? `group of ${rec.party}` : '', rec.reentries ? `🚨 tried again ×${rec.reentries}` : ''].filter(Boolean).join(' · ') })))),
+    );
+  });
+  q.focus();
+}
+
 // ---------------------------------------------------------------- routing
 
 function go(page) {
@@ -284,7 +673,10 @@ async function route() {
   setHeader();
   const page = location.hash.replace(/^#\/?/, '');
   if (page === 'people' && me.role === 'superadmin') return peopleView();
+  if (page === 'log') return logView();
+  if (page === 'check') return checkView();
   homeView();
+  flushQueue();
 }
 
 $('#logoutBtn').addEventListener('click', async () => {
@@ -293,6 +685,12 @@ $('#logoutBtn').addEventListener('click', async () => {
   $('#toast').hidden = true;
   go('');
   route();
+
+// Works without signal once opened: the app's files are kept on the phone.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js', { scope: '/app/' }).catch(() => undefined);
 });
 window.addEventListener('hashchange', route);
 route();
+
+// Works without signal once opened: the app's files are kept on the phone.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js', { scope: '/app/' }).catch(() => undefined);
