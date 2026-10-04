@@ -6,8 +6,8 @@ import { ROLES, type AppUser, type Role } from './permissions';
 
 /**
  * App accounts: name + PIN, created by the superadmin. PINs are salted scrypt hashes; sessions are
- * random tokens kept in an HttpOnly cookie, stored here only as a sha256. Five wrong tries lock a
- * name for 15 minutes (unknown names too, so the answer never hints at who exists).
+ * random tokens kept in an HttpOnly cookie, stored here only as a sha256. Wrong PINs lock a name
+ * (unknown names too, with the same limits and answers): see "login limits" below.
  */
 
 const scrypt = promisify(crypto.scrypt) as (pin: string, salt: Buffer, len: number) => Promise<Buffer>;
@@ -196,6 +196,12 @@ export async function deleteUser(id: string, by: AppUser): Promise<void> {
 // done with made-up names can lock out real staff. Made-up names go in a fixed-size table indexed by a
 // secret keyed hash: nothing is evicted (a flood can't reset a count) and memory stays fixed.
 // Every try is counted before anything is awaited.
+//
+// Known trade-off (decided 2026-10-04): with fixed memory, made-up names that share a slot can lock a
+// little earlier than a real name would. A very large flood (millions of tries from tens of thousands
+// of addresses) could therefore hint statistically at which names are real. We accept that: staff
+// names aren't secret (they're on badges), and the alternative, shared counters, would let the same
+// flood lock real staff out.
 
 const MAX_NAME_TRIES = 20;
 const MAX_DEVICE_TRIES = 30;
