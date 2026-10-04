@@ -106,7 +106,7 @@ appApiRouter.post(
 appApiRouter.post(
   '/login',
   wrap(async (req, res) => {
-    const { user, token } = await login(req.body?.name, req.body?.pin);
+    const { user, token } = await login(req.body?.name, req.body?.pin, Date.now(), req.ip ?? 'unknown');
     setSession(req, res, token);
     res.json({ ok: true, user });
   }),

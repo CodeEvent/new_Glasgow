@@ -1,5 +1,6 @@
 import path from 'path';
 import express, { type NextFunction, type Request, type Response } from 'express';
+import { getConfig } from './config/env';
 import { getPool } from './db/pool';
 import { hasPendingOfflineIncidents } from './services/offlineBuffer';
 import { scanRouter } from './routes/scan';
@@ -11,7 +12,8 @@ import { appApiRouter } from './routes/appApi';
 export function createApp(opts: { extend?: (app: express.Express) => void } = {}) {
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', true);
+  const trust = getConfig().TRUST_PROXY;
+  app.set('trust proxy', /^\d+$/.test(trust) ? Number(trust) : trust === 'true' ? true : trust === 'false' ? false : trust);
 
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');

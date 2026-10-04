@@ -4,7 +4,7 @@ import { createApp } from '../src/app';
 import { resetConfigCache } from '../src/config/env';
 import { closePool, getPool } from '../src/db/pool';
 import { can, type AppUser } from '../src/services/permissions';
-import { hashPin, resetLoginLimits, verifyPin } from '../src/services/accounts';
+import { hashPin, resetLoginLimits, setLoginTrackingCap, verifyPin } from '../src/services/accounts';
 import { HAS_DB, resetDatabase, tempOfflineLog } from './helpers';
 
 const area = (hub: string, id = 'a1'): AppUser => ({ id, name: 'Amy', role: 'area', hub });
@@ -133,6 +133,40 @@ describe.skipIf(!HAS_DB)('accounts API (PostgreSQL)', () => {
     // unknown names lock the same way (no hint about who exists)
     for (let i = 0; i < 4; i++) await tryLogin('Nobody', '0000');
     expect((await tryLogin('Nobody', '0000')).status).toBe(429);
+  });
+
+  it('wrong PINs sent at the same moment still lock after 5', async () => {
+    const gio = await setupSuperadmin();
+    await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '2468' });
+    const burst = await Promise.all(Array.from({ length: 12 }, (_, i) => json(request(app).post('/api/app/login')).send({ name: 'Amy', pin: String(1000 + i) })));
+    expect(burst.filter((r) => r.status === 401)).toHaveLength(5);
+    expect(burst.filter((r) => r.status === 429)).toHaveLength(7);
+    expect((await json(request(app).post('/api/app/login')).send({ name: 'Amy', pin: '2468' })).status).toBe(429);
+  });
+
+  it('flooding with made-up names doesn’t unlock a locked name', async () => {
+    const gio = await setupSuperadmin();
+    await json(gio.post('/api/app/users')).send({ name: 'Amy', role: 'area', hub: 'West Hub', pin: '2468' });
+    setLoginTrackingCap(5);
+    try {
+      for (let i = 0; i < 5; i++) await json(request(app).post('/api/app/login')).send({ name: 'Amy', pin: '0000' });
+      for (let i = 0; i < 8; i++) await json(request(app).post('/api/app/login').set('x-forwarded-for', `10.0.0.${i}`)).send({ name: `Fake${i}`, pin: '0000' });
+      expect((await json(request(app).post('/api/app/login')).send({ name: 'Amy', pin: '2468' })).status).toBe(429);
+    } finally {
+      setLoginTrackingCap(10_000);
+    }
+  });
+
+  it('one device guessing across many names is stopped', async () => {
+    await setupSuperadmin();
+    const from = (name: string) => json(request(app).post('/api/app/login').set('x-forwarded-for', '10.9.9.9')).send({ name, pin: '0000' });
+    for (let i = 0; i < 30; i++) expect((await from(`Name${i}`)).status).toBe(401);
+    expect((await from('Gio')).status).toBe(429);
+    // a made-up address in front of the real one doesn't make it a new device
+    const spoofed = await json(request(app).post('/api/app/login').set('x-forwarded-for', '1.2.3.4, 10.9.9.9')).send({ name: 'Gio', pin: '482913' });
+    expect(spoofed.status).toBe(429);
+    // another device is unaffected
+    expect((await json(request(app).post('/api/app/login').set('x-forwarded-for', '10.9.9.10')).send({ name: 'Gio', pin: '482913' })).status).toBe(200);
   });
 
   it('logout ends the session; a deactivated person is logged out at once', async () => {

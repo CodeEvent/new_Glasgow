@@ -17,6 +17,8 @@ services:
         sync: false
       - key: DATABASE_SSL
         value: "true"
+      - key: TRUST_PROXY      # Render's proxy is one hop in front of the app
+        value: "1"
       - key: WA_LINKED_ENABLED
         value: "true"
       - key: WA_LINKED_POST_ALERTS

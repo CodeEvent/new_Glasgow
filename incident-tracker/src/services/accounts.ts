@@ -166,27 +166,61 @@ export async function deleteUser(id: string, by: AppUser): Promise<void> {
 
 // ---------------------------------------------------------------- login and sessions
 
-const tries = new Map<string, { n: number; lockedUntil: number }>();
+// Failed tries per name and per device. A try is counted before the PIN is checked, so guesses sent
+// at the same moment can't slip past the limit; locked entries are never dropped early.
+type Tries = { n: number; lockedUntil: number };
+const tries = new Map<string, Tries>();
+const deviceTries = new Map<string, Tries>();
+const MAX_DEVICE_TRIES = 30; // wrong PINs from one device in 15 minutes, across all names
+let trackingCap = 10_000;
+
 /** For tests. */
-export const resetLoginLimits = () => tries.clear();
+export const resetLoginLimits = () => {
+  tries.clear();
+  deviceTries.clear();
+};
+/** For tests: how many entries are kept before unlocked ones are dropped. */
+export const setLoginTrackingCap = (n: number) => {
+  trackingCap = n;
+};
+
+function current(map: Map<string, Tries>, key: string, now: number): Tries {
+  const t = map.get(key);
+  if (!t || (t.lockedUntil && t.lockedUntil <= now)) return { n: 0, lockedUntil: 0 };
+  return t;
+}
+
+/** Keeps memory bounded without ever forgetting a lock that is still running. */
+function prune(map: Map<string, Tries>, now: number) {
+  if (map.size <= trackingCap) return;
+  for (const [k, t] of map) if (t.lockedUntil <= now) map.delete(k);
+}
+
+function count(map: Map<string, Tries>, key: string, max: number, now: number): void {
+  const t = current(map, key, now);
+  t.n += 1;
+  if (t.n >= max) t.lockedUntil = now + LOCK_MS;
+  map.set(key, t);
+  prune(map, now);
+}
 
 const WRONG = 'Wrong name or PIN.';
+const LOCKED = 'Too many wrong tries. Wait 15 minutes, or ask the superadmin.';
 
-export async function login(nameIn: unknown, pinIn: unknown, now = Date.now()): Promise<{ user: PublicUser; token: string }> {
+export async function login(nameIn: unknown, pinIn: unknown, now = Date.now(), device = 'unknown'): Promise<{ user: PublicUser; token: string }> {
   const key = nameKey(String(nameIn ?? '')).slice(0, 60);
   const pin = String(pinIn ?? '').slice(0, 16);
-  const t = tries.get(key);
-  if (t && t.lockedUntil > now) throw new AccountError('Too many wrong tries. Wait 15 minutes, or ask the superadmin.', 429);
+  if (current(tries, key, now).lockedUntil > now || current(deviceTries, device, now).lockedUntil > now) throw new AccountError(LOCKED, 429);
+  // Count this try now (before any await); a right PIN clears it below.
+  count(tries, key, MAX_TRIES, now);
 
   const { rows } = await getPool().query<UserRow>('SELECT * FROM app_users WHERE name_key = $1', [key]);
   const u = rows[0];
   // Hash even for unknown names, so the time taken doesn't say who exists.
   const ok = u ? await verifyPin(pin, u.pin_hash) : (await verifyPin(pin, DUMMY_HASH), false);
   if (!ok || !u.active) {
-    const n = (t && !t.lockedUntil ? t.n : 0) + 1;
-    if (tries.size > 10_000) tries.clear(); // don't let made-up names fill the memory
-    tries.set(key, n >= MAX_TRIES ? { n: 0, lockedUntil: now + LOCK_MS } : { n, lockedUntil: 0 });
-    if (n >= MAX_TRIES) await audit(null, 'login_locked', key).catch(() => undefined);
+    count(deviceTries, device, MAX_DEVICE_TRIES, now);
+    if (tries.get(key)?.lockedUntil === now + LOCK_MS) await audit(null, 'login_locked', key).catch(() => undefined);
     throw new AccountError(WRONG, 401);
   }
   tries.delete(key);

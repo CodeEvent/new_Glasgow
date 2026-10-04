@@ -97,6 +97,9 @@ const envObject = z.object({
   ADMIN_API_KEY: optionalText,
 
   // Optional tuning / hardening.
+  // Which proxies may say who the client is (X-Forwarded-For / -Proto). "loopback" = only a tunnel on
+  // the same machine (cloudflared on the phone). Behind one hosting proxy (Render): 1.
+  TRUST_PROXY: z.string().trim().default('loopback'),
   PORT: z.coerce.number().int().positive().default(3000),
   NODE_ENV: z.string().default('development'),
   MOCK_WHATSAPP_API: boolFlag,
