@@ -79,6 +79,7 @@ const text = (max: number) => z.string().trim().max(max).optional();
 
 const logSchema = z.object({
   client_id: z.uuid('Missing log id (update the app).'),
+  author_id: z.uuid().optional(), // who wrote it on the phone (a log saved offline is only sent by them)
   decision: z.enum(['refused', 'cool_off', 'ejected'], 'Pick refused, 30 minutes or ejected.'),
   seats: z
     .array(z.object({ section: seatPart(16, 'section'), row: seatPart(8, 'row'), seat: seatPart(8, 'seat number') }))
@@ -137,6 +138,7 @@ export async function logIncident(user: AppUser, body: unknown): Promise<{ resul
   if (!parsed.success) throw new LogError(parsed.error.issues[0]?.message ?? 'That log isn’t complete.');
   const v = parsed.data;
 
+  if (v.author_id && v.author_id !== user.id) throw new LogError('That log was written by someone else on this phone: they need to log in to send it.', 409);
   const hub = (v.hub ?? (user.role === 'area' ? user.hub : undefined)) as Hub | undefined;
   if (!hub) throw new LogError('Pick the area (hub) you’re at.');
   if (!can(user, 'log', { hub })) throw new LogError(`You can only log in your own area (${user.hub?.replace(' Hub', '')}).`, 403);

@@ -191,26 +191,88 @@ export async function deleteUser(id: string, by: AppUser): Promise<void> {
 // locks, so someone guessing on the venue Wi-Fi can't lock staff out. Its cookie is cancelled after 5
 // wrong PINs (a stolen phone gets 5 guesses), and by a new PIN, role, switching off or unlocking.
 //
-// Name and name+device counts live in fixed-size tables indexed by a secret keyed hash, the same for
-// real and made-up names: nothing is ever pushed out (so floods can't reset a count) and nothing
-// behaves differently for names that exist. Every try is counted before anything is awaited.
+// Counts are never forgotten on a timer: they clear on a right PIN, or when a lock runs out.
+// Real people's names (known up front) have exact counters of their own, never dropped, so nothing
+// done with made-up names can lock out real staff. Made-up names go in a fixed-size table indexed by a
+// secret keyed hash: nothing is evicted (a flood can't reset a count) and memory stays fixed.
+// Every try is counted before anything is awaited.
 
 const MAX_NAME_TRIES = 20;
 const MAX_DEVICE_TRIES = 30;
 const MAX_LOCK_MS = 24 * 3_600_000;
-const COUNT_WINDOW_MS = 60 * 60_000; // wrong tries older than this (without a lock) are forgotten
 
-/** Counters in a fixed table: a key's slot comes from a keyed hash, so nobody can aim at a slot. */
-class SlotTable {
+interface Counters {
+  locked(key: string, now: number): boolean;
+  /** Counts a try; true if this try started a lock. */
+  count(key: string, now: number, max: number, doubling: boolean): boolean;
+  /** A right PIN: forget the wrong tries (a running doubling level stays for a day). */
+  clearCount(key: string, now: number): void;
+  /** Superadmin unlock. */
+  clear(key: string): void;
+  reset(): void;
+}
+
+type Slot = { n: number; lockedUntil: number; level: number; lastLockAt: number };
+function bump(t: Slot, now: number, max: number, doubling: boolean): boolean {
+  if (t.lockedUntil && t.lockedUntil <= now) {
+    t.n = 0; // the lock ran out
+    t.lockedUntil = 0;
+  }
+  t.n = Math.min(t.n + 1, 65_535);
+  if (t.n < max) return false;
+  t.level = !doubling || now - t.lastLockAt > MAX_LOCK_MS ? 1 : Math.min(t.level + 1, 12);
+  t.lastLockAt = now;
+  t.lockedUntil = now + Math.min(LOCK_MS * 2 ** (t.level - 1), MAX_LOCK_MS);
+  return true;
+}
+
+/** Exact counters for real names (and real name + device pairs, capped: oldest unlocked go first). */
+class ExactCounters implements Counters {
+  private map = new Map<string, Slot>();
+  constructor(private readonly capped: boolean) {}
+  locked(key: string, now: number) {
+    return (this.map.get(key)?.lockedUntil ?? 0) > now;
+  }
+  count(key: string, now: number, max: number, doubling: boolean) {
+    let t = this.map.get(key);
+    if (!t) {
+      t = { n: 0, lockedUntil: 0, level: 0, lastLockAt: 0 };
+      this.map.set(key, t);
+      if (this.capped && this.map.size > trackingCap) {
+        for (const [k, e] of this.map) {
+          if (this.map.size <= trackingCap * 0.9) break;
+          if (e.lockedUntil <= now && k !== key) this.map.delete(k);
+        }
+      }
+    }
+    if (t.lockedUntil > now) return false;
+    return bump(t, now, max, doubling);
+  }
+  clearCount(key: string, now: number) {
+    const t = this.map.get(key);
+    if (t && t.lockedUntil <= now) t.n = 0;
+  }
+  clear(key: string) {
+    this.map.delete(key);
+  }
+  reset() {
+    this.map.clear();
+  }
+}
+
+/** Made-up names: a fixed table; a key's slot comes from a keyed hash, so nobody can aim at a slot. */
+class SlotTable implements Counters {
   private secret = crypto.randomBytes(32);
-  private n: Uint16Array;
-  private since: Float64Array; // first counted try in the current window
-  private lockedUntil: Float64Array;
-  private level: Uint8Array; // how many locks in a row (for the doubling)
-  private lastLockAt: Float64Array;
-  constructor(readonly size: number) {
+  private n!: Uint16Array;
+  private lockedUntil!: Float64Array;
+  private level!: Uint8Array;
+  private lastLockAt!: Float64Array;
+  constructor(public size: number) {
+    this.resize(size);
+  }
+  resize(size: number) {
+    this.size = size;
     this.n = new Uint16Array(size);
-    this.since = new Float64Array(size);
     this.lockedUntil = new Float64Array(size);
     this.level = new Uint8Array(size);
     this.lastLockAt = new Float64Array(size);
@@ -218,49 +280,45 @@ class SlotTable {
   private slot(key: string): number {
     return crypto.createHmac('sha256', this.secret).update(key).digest().readUInt32BE(0) % this.size;
   }
-  locked(key: string, now: number): boolean {
+  locked(key: string, now: number) {
     return this.lockedUntil[this.slot(key)] > now;
   }
-  /** Counts a try; true if this try started a lock. */
-  count(key: string, now: number, max: number, doubling: boolean): boolean {
+  count(key: string, now: number, max: number, doubling: boolean) {
     const i = this.slot(key);
     if (this.lockedUntil[i] > now) return false;
-    if (this.lockedUntil[i] || now - this.since[i] > COUNT_WINDOW_MS) {
-      this.n[i] = 0; // a lock ran out, or the old tries are stale
-      this.lockedUntil[i] = 0;
-    }
-    if (this.n[i] === 0) this.since[i] = now;
-    this.n[i] = Math.min(this.n[i] + 1, 65_535);
-    if (this.n[i] < max) return false;
-    this.level[i] = !doubling || now - this.lastLockAt[i] > MAX_LOCK_MS ? 1 : Math.min(this.level[i] + 1, 12);
-    this.lastLockAt[i] = now;
-    this.lockedUntil[i] = now + Math.min(LOCK_MS * 2 ** (this.level[i] - 1), MAX_LOCK_MS);
-    return true;
+    const t = { n: this.n[i], lockedUntil: this.lockedUntil[i], level: this.level[i], lastLockAt: this.lastLockAt[i] };
+    const started = bump(t, now, max, doubling);
+    [this.n[i], this.lockedUntil[i], this.level[i], this.lastLockAt[i]] = [t.n, t.lockedUntil, t.level, t.lastLockAt];
+    return started;
   }
-  /** A right PIN: forget the wrong tries (a running doubling level stays for a day). */
-  clearCount(key: string, now: number): void {
-    const i = this.slot(key);
-    if (this.lockedUntil[i] <= now) this.n[i] = 0;
+  clearCount() {
+    /* made-up names never log in */
   }
-  /** Superadmin unlock. */
-  clear(key: string): void {
+  clear(key: string) {
     const i = this.slot(key);
     this.n[i] = 0;
     this.lockedUntil[i] = 0;
-    this.level[i] = 0;
   }
-  reset(): void {
-    for (const a of [this.n, this.since, this.lockedUntil, this.level, this.lastLockAt]) a.fill(0);
+  reset() {
+    for (const a of [this.n, this.lockedUntil, this.level, this.lastLockAt]) a.fill(0);
   }
 }
 
 type Tries = { n: number; lockedUntil: number };
-const nameTable = new SlotTable(1 << 16);
-const pairTable = new SlotTable(1 << 17);
+const realNames = new ExactCounters(false); // bounded by the number of staff
+const realPairs = new ExactCounters(true);
+const madeUpNames = new SlotTable(1 << 17);
+const madeUpPairs = new SlotTable(1 << 17);
 const unlocks = new Map<string, number>(); // real names: bumped by an unlock, so their old device locks don't apply
 const deviceTries = new Map<string, Tries>(); // per connection (no names involved)
 const tokenTries = new Map<string, Tries>(); // wrong PINs sent with a trusted-phone cookie
 let trackingCap = 10_000;
+
+/** For tests: shrink the made-up-name tables (1 = every made-up name shares one slot). */
+export const setMadeUpTableSize = (n: number) => {
+  madeUpNames.resize(n);
+  madeUpPairs.resize(n);
+};
 
 // Real names and trusted phones, kept in memory so the limits above need no await.
 let cache: Promise<{ names: Map<string, string>; devices: Map<string, string> }> | null = null;
@@ -283,8 +341,7 @@ const forgetCache = () => {
 
 /** For tests. */
 export const resetLoginLimits = () => {
-  nameTable.reset();
-  pairTable.reset();
+  for (const c of [realNames, realPairs, madeUpNames, madeUpPairs]) c.reset();
   unlocks.clear();
   deviceTries.clear();
   tokenTries.clear();
@@ -347,7 +404,7 @@ async function forgetDevices(userId: string): Promise<void> {
 /** Superadmin: clear a name's lock (e.g. someone was guessing at it), on every device. */
 export function unlockName(name: string): void {
   const key = nameKey(name);
-  nameTable.clear(key);
+  realNames.clear(key);
   unlocks.set(key, (unlocks.get(key) ?? 0) + 1);
 }
 
@@ -368,10 +425,11 @@ export async function login(
   const tokenHash = deviceToken && deviceToken.length <= 100 ? sha256(deviceToken) : null;
   const trusted = !!userId && !!tokenHash && devices.get(tokenHash) === userId;
   const pk = pairKey(device, key);
-  if (pairTable.locked(pk, now)) throw new AccountError(LOCKED, 429);
-  if (!trusted && (isLocked(deviceTries.get(device), now) || nameTable.locked(key, now))) throw new AccountError(LOCKED, 429);
-  const pairLocked = pairTable.count(pk, now, MAX_TRIES, false);
-  const nameLocked = nameTable.count(key, now, MAX_NAME_TRIES, true); // trusted phones' wrong PINs count too (the lock just doesn't stop them)
+  const [names_, pairs] = userId ? [realNames, realPairs] : [madeUpNames, madeUpPairs];
+  if (pairs.locked(pk, now)) throw new AccountError(LOCKED, 429);
+  if (!trusted && (isLocked(deviceTries.get(device), now) || names_.locked(key, now))) throw new AccountError(LOCKED, 429);
+  const pairLocked = pairs.count(pk, now, MAX_TRIES, false);
+  const nameLocked = names_.count(key, now, MAX_NAME_TRIES, true); // trusted phones' wrong PINs count too (the lock just doesn't stop them)
   // A trusted cookie gets 5 wrong PINs in all, wherever they come from; then it's cancelled.
   const tokenSpent = trusted ? countSimple(tokenTries, tokenHash!, MAX_TRIES, now) : false;
   if (tokenSpent) devices.delete(tokenHash!);
@@ -393,8 +451,8 @@ export async function login(
   }
   if (tokenHash) tokenTries.delete(tokenHash);
   // Right PIN: give the tries back (the name keeps its lock level for a day).
-  pairTable.clear(pk);
-  nameTable.clearCount(key, now);
+  realPairs.clear(pk);
+  realNames.clearCount(key, now);
   const d = deviceTries.get(device);
   if (d && !isLocked(d, now)) d.n = Math.max(0, d.n - 1);
   if (pin.length < 6) throw new AccountError('PINs are 6 digits now: ask the superadmin for a new 6-digit PIN.', 403);

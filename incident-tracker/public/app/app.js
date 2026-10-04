@@ -70,7 +70,7 @@ function setHeader() {
   const b = $('#whoRole');
   b.textContent = me.role === 'area' ? area(me.hub) : ROLE_LABEL[me.role];
   b.className = `badge ${me.role}`;
-  setQueue(queued());
+  setQueue(allQueued());
 }
 
 // ---------------------------------------------------------------- setup and login
@@ -330,15 +330,25 @@ function recordText(r) {
 
 // ---------------------------------------------------------------- offline queue
 
+// Each waiting log keeps who wrote it: it's only ever sent by that person, and dropped after a day.
 const QUEUE = 'gk_queue';
-const queued = () => store.get(QUEUE, []);
-function setQueue(q) {
-  store.set(QUEUE, q);
+const DAY = 24 * 3600 * 1000;
+const allQueued = () => store.get(QUEUE, []).filter((e) => e && e.body && e.user_id && Date.now() - e.saved_at < DAY);
+const queued = () => (me ? allQueued().filter((e) => e.user_id === me.id) : []);
+function setQueue(all) {
+  store.set(QUEUE, all);
+  const mine = me ? all.filter((e) => e.user_id === me.id).length : 0;
   const badge = $('#queueBadge');
   if (badge) {
-    badge.hidden = !q.length;
-    badge.textContent = `${q.length} waiting`;
+    badge.hidden = !mine;
+    badge.textContent = `${mine} waiting`;
   }
+}
+function enqueue(body) {
+  setQueue([...allQueued(), { body, user_id: me.id, saved_at: Date.now() }]);
+}
+function dequeue(entry) {
+  setQueue(allQueued().filter((e) => e.body.client_id !== entry.body.client_id));
 }
 
 /** Sends logs saved while there was no signal. The server ignores ones it already has. */
@@ -347,11 +357,12 @@ async function flushQueue() {
   if (flushing || !me) return;
   flushing = true;
   try {
+    setQueue(allQueued()); // drops ones older than a day
     let q = queued();
-    while (q.length) {
+    while (q.length && me) {
       let res;
       try {
-        res = await fetch('/api/app/logs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(q[0]), credentials: 'same-origin' });
+        res = await fetch('/api/app/logs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(q[0].body), credentials: 'same-origin' });
       } catch {
         break; // still no signal
       }
@@ -363,8 +374,8 @@ async function flushQueue() {
       } else {
         toast(`Couldn’t send a saved log: ${data.error || 'rejected'}`);
       }
-      q = queued().slice(1);
-      setQueue(q);
+      dequeue(q[0]);
+      q = queued();
     }
   } finally {
     flushing = false;
@@ -529,6 +540,7 @@ async function logView() {
     const extra = $('[data-extra-reason]', root).value.split(',').map((x) => x.trim()).filter(Boolean);
     return {
       client_id: uuid(),
+      author_id: me.id,
       decision: state.decision,
       seats: (parseSeats(seatIn.value) || []).map((seat) => ({ section: secIn.value.trim(), row: rowIn.value.trim(), seat })),
       hub: state.hub || undefined,
@@ -572,12 +584,12 @@ async function logView() {
     try {
       res = await fetch('/api/app/logs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b), credentials: 'same-origin' });
     } catch {
-      setQueue([...queued(), b]);
+      enqueue(b);
       return resultView(b, null);
     }
     const data = await res.json().catch(() => ({ ok: false, error: 'Something went wrong.' }));
     if (res.status === 401) {
-      setQueue([...queued(), b]);
+      enqueue(b);
       me = null;
       toast('Log in again: your log is saved on this phone and will be sent.');
       return route();
@@ -680,6 +692,15 @@ async function route() {
 }
 
 $('#logoutBtn').addEventListener('click', async () => {
+  const waiting = queued();
+  if (waiting.length) {
+    await flushQueue();
+    const still = queued();
+    if (still.length) {
+      if (!confirm(`${still.length} log${still.length === 1 ? '' : 's'} not sent yet (no signal). Log out anyway and delete ${still.length === 1 ? 'it' : 'them'} from this phone?`)) return;
+      setQueue(allQueued().filter((e) => e.user_id !== me.id));
+    }
+  }
   await api('/logout', { method: 'POST', body: {}, allow401: true });
   me = null;
   $('#toast').hidden = true;

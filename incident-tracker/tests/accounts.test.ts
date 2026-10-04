@@ -4,7 +4,7 @@ import { createApp } from '../src/app';
 import { resetConfigCache } from '../src/config/env';
 import { closePool, getPool } from '../src/db/pool';
 import { can, type AppUser } from '../src/services/permissions';
-import { deviceKey, hashPin, login, resetLoginLimits, setLoginTrackingCap, verifyPin } from '../src/services/accounts';
+import { deviceKey, hashPin, login, resetLoginLimits, setLoginTrackingCap, setMadeUpTableSize, verifyPin } from '../src/services/accounts';
 import { HAS_DB, resetDatabase, tempOfflineLog } from './helpers';
 
 const area = (hub: string, id = 'a1'): AppUser => ({ id, name: 'Amy', role: 'area', hub });
@@ -242,6 +242,26 @@ describe.skipIf(!HAS_DB)('accounts API (PostgreSQL)', () => {
       }
     } finally {
       setLoginTrackingCap(10_000);
+    }
+  });
+
+  it('guesses spread out over hours still add up to a lock', async () => {
+    await setupSuperadmin();
+    const t0 = Date.now();
+    for (let i = 0; i < 19; i++) await login('Gio', '000000', t0 + i * 1000, `10.8.${i}.1`).catch(() => undefined);
+    await login('Gio', '000000', t0 + 3 * 3_600_000, '10.8.50.1').catch(() => undefined); // 20th, hours later
+    await expect(login('Gio', '482913', t0 + 3 * 3_600_000 + 1000, '10.8.51.1')).rejects.toMatchObject({ status: 429 });
+  });
+
+  it('a flood of made-up names can’t lock out real staff', async () => {
+    await setupSuperadmin();
+    setMadeUpTableSize(1); // worst case: every made-up name in one slot
+    try {
+      for (let i = 0; i < 20; i++) await login(`Fake${i}`, '000000', Date.now(), `10.9.${i}.1`).catch(() => undefined);
+      await expect(login('Someone', '000000', Date.now(), '10.9.99.1')).rejects.toMatchObject({ status: 429 });
+      await expect(login('Gio', '482913', Date.now(), '10.9.98.1')).resolves.toBeTruthy();
+    } finally {
+      setMadeUpTableSize(1 << 17);
     }
   });
 

@@ -120,6 +120,12 @@ describe.skipIf(!HAS_DB)('app logging (PostgreSQL)', () => {
     expect((await getPool().query('SELECT count(*)::int AS n FROM scan_events')).rows[0].n).toBe(1);
   });
 
+  it('a log saved offline by someone else can’t be sent under your login', async () => {
+    const r = await log(sam, { hub: 'East Hub', author_id: amyId });
+    expect(r.status).toBe(409);
+    expect((await log(amy, { author_id: amyId })).status).toBe(200);
+  });
+
   it('keeps the time it was logged on the phone (offline)', async () => {
     const at = new Date(Date.now() - 20 * 60_000).toISOString();
     await log(amy, { decision: 'cool_off', occurred_at: at });
