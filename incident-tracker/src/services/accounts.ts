@@ -190,21 +190,76 @@ export async function deleteUser(id: string, by: AppUser): Promise<void> {
 // A trusted phone (logged in before with the right PIN, gk_device cookie) skips the device and name
 // locks, so someone guessing on the venue Wi-Fi can't lock staff out. Its cookie is cancelled after 5
 // wrong PINs (a stolen phone gets 5 guesses), and by a new PIN, role, switching off or unlocking.
-// Made-up names lock exactly like real ones (same limits, same answers), so locks don't say who exists.
-// Every try is counted before anything is awaited. Real names (known up front) and made-up names are
-// kept in separate lists, so a flood of made-up names can't push out the counts on real people.
+//
+// Name and name+device counts live in fixed-size tables indexed by a secret keyed hash, the same for
+// real and made-up names: nothing is ever pushed out (so floods can't reset a count) and nothing
+// behaves differently for names that exist. Every try is counted before anything is awaited.
 
-type Tries = { n: number; lockedUntil: number };
-type NameTries = Tries & { level: number; lastLockAt: number };
 const MAX_NAME_TRIES = 20;
 const MAX_DEVICE_TRIES = 30;
 const MAX_LOCK_MS = 24 * 3_600_000;
-const pairTries = new Map<string, Tries>(); // device|name, real names
-const madeUpTries = new Map<string, Tries>(); // device|name, made-up names (disposable)
-const nameTries = new Map<string, NameTries>(); // real names only: never evicted
-const madeUpNameTries = new Map<string, NameTries>(); // made-up names: same rules, disposable
+const COUNT_WINDOW_MS = 60 * 60_000; // wrong tries older than this (without a lock) are forgotten
+
+/** Counters in a fixed table: a key's slot comes from a keyed hash, so nobody can aim at a slot. */
+class SlotTable {
+  private secret = crypto.randomBytes(32);
+  private n: Uint16Array;
+  private since: Float64Array; // first counted try in the current window
+  private lockedUntil: Float64Array;
+  private level: Uint8Array; // how many locks in a row (for the doubling)
+  private lastLockAt: Float64Array;
+  constructor(readonly size: number) {
+    this.n = new Uint16Array(size);
+    this.since = new Float64Array(size);
+    this.lockedUntil = new Float64Array(size);
+    this.level = new Uint8Array(size);
+    this.lastLockAt = new Float64Array(size);
+  }
+  private slot(key: string): number {
+    return crypto.createHmac('sha256', this.secret).update(key).digest().readUInt32BE(0) % this.size;
+  }
+  locked(key: string, now: number): boolean {
+    return this.lockedUntil[this.slot(key)] > now;
+  }
+  /** Counts a try; true if this try started a lock. */
+  count(key: string, now: number, max: number, doubling: boolean): boolean {
+    const i = this.slot(key);
+    if (this.lockedUntil[i] > now) return false;
+    if (this.lockedUntil[i] || now - this.since[i] > COUNT_WINDOW_MS) {
+      this.n[i] = 0; // a lock ran out, or the old tries are stale
+      this.lockedUntil[i] = 0;
+    }
+    if (this.n[i] === 0) this.since[i] = now;
+    this.n[i] = Math.min(this.n[i] + 1, 65_535);
+    if (this.n[i] < max) return false;
+    this.level[i] = !doubling || now - this.lastLockAt[i] > MAX_LOCK_MS ? 1 : Math.min(this.level[i] + 1, 12);
+    this.lastLockAt[i] = now;
+    this.lockedUntil[i] = now + Math.min(LOCK_MS * 2 ** (this.level[i] - 1), MAX_LOCK_MS);
+    return true;
+  }
+  /** A right PIN: forget the wrong tries (a running doubling level stays for a day). */
+  clearCount(key: string, now: number): void {
+    const i = this.slot(key);
+    if (this.lockedUntil[i] <= now) this.n[i] = 0;
+  }
+  /** Superadmin unlock. */
+  clear(key: string): void {
+    const i = this.slot(key);
+    this.n[i] = 0;
+    this.lockedUntil[i] = 0;
+    this.level[i] = 0;
+  }
+  reset(): void {
+    for (const a of [this.n, this.since, this.lockedUntil, this.level, this.lastLockAt]) a.fill(0);
+  }
+}
+
+type Tries = { n: number; lockedUntil: number };
+const nameTable = new SlotTable(1 << 16);
+const pairTable = new SlotTable(1 << 17);
+const unlocks = new Map<string, number>(); // real names: bumped by an unlock, so their old device locks don't apply
+const deviceTries = new Map<string, Tries>(); // per connection (no names involved)
 const tokenTries = new Map<string, Tries>(); // wrong PINs sent with a trusted-phone cookie
-const deviceTries = new Map<string, Tries>();
 let trackingCap = 10_000;
 
 // Real names and trusted phones, kept in memory so the limits above need no await.
@@ -228,10 +283,14 @@ const forgetCache = () => {
 
 /** For tests. */
 export const resetLoginLimits = () => {
-  for (const m of [pairTries, madeUpTries, nameTries, madeUpNameTries, deviceTries, tokenTries]) m.clear();
+  nameTable.reset();
+  pairTable.reset();
+  unlocks.clear();
+  deviceTries.clear();
+  tokenTries.clear();
   forgetCache();
 };
-/** For tests: entries kept per list before the oldest are dropped. */
+/** For tests: entries kept in the per-connection list before the oldest are dropped. */
 export const setLoginTrackingCap = (n: number) => {
   trackingCap = n;
 };
@@ -253,51 +312,29 @@ export function deviceKey(ip: string): string {
 
 const isLocked = (t: Tries | undefined, now: number) => !!t && t.lockedUntil > now;
 
-/** The entry to count into, starting again once a lock has run out. */
-function fresh<T extends Tries>(map: Map<string, T>, key: string, now: number, init: () => T): T {
-  let t = map.get(key);
-  if (!t) t = init();
-  else if (t.lockedUntil && t.lockedUntil <= now) Object.assign(t, { n: 0, lockedUntil: 0 });
-  map.delete(key); // re-insert: newest last
-  map.set(key, t);
-  return t;
-}
-
-/** Oldest first: entries without a running lock, then (past a hard limit) any. */
-function bound(map: Map<string, Tries>, now: number) {
-  if (map.size <= trackingCap) return;
-  const target = Math.floor(trackingCap * 0.9);
-  for (const [k, t] of map) {
-    if (map.size <= target) break;
-    if (!isLocked(t, now)) map.delete(k);
-  }
-  for (const k of map.keys()) {
-    if (map.size <= trackingCap * 5) break;
-    map.delete(k);
-  }
-}
-
+/** Per-connection and per-cookie counts: a small map, oldest entries dropped first (no names in it). */
 function countSimple(map: Map<string, Tries>, key: string, max: number, now: number): boolean {
-  const t = fresh(map, key, now, () => ({ n: 0, lockedUntil: 0 }));
+  let t = map.get(key);
+  if (!t || (t.lockedUntil && t.lockedUntil <= now)) t = { n: 0, lockedUntil: 0 };
+  map.delete(key);
+  map.set(key, t);
   t.n += 1;
   const lockedNow = t.n >= max && !t.lockedUntil;
   if (lockedNow) t.lockedUntil = now + LOCK_MS;
-  bound(map, now);
+  if (map.size > trackingCap) {
+    for (const [k, e] of map) {
+      if (map.size <= trackingCap * 0.9) break;
+      if (!isLocked(e, now)) map.delete(k);
+    }
+    for (const k of map.keys()) {
+      if (map.size <= trackingCap * 5) break;
+      map.delete(k);
+    }
+  }
   return lockedNow;
 }
 
-function countName(map: Map<string, NameTries>, key: string, now: number): boolean {
-  const t = fresh(map, key, now, () => ({ n: 0, lockedUntil: 0, level: 0, lastLockAt: 0 }));
-  if (map === madeUpNameTries) bound(map, now);
-  t.n += 1;
-  if (t.n < MAX_NAME_TRIES || t.lockedUntil) return false;
-  t.level = now - t.lastLockAt > MAX_LOCK_MS ? 1 : t.level + 1;
-  t.lastLockAt = now;
-  t.lockedUntil = now + Math.min(LOCK_MS * 2 ** (t.level - 1), MAX_LOCK_MS);
-  return true;
-}
-
-const nameOfPair = (k: string) => k.slice(k.indexOf('|') + 1);
+const pairKey = (device: string, name: string) => `${device}|${name}|${unlocks.get(name) ?? 0}`;
 const WRONG = 'Wrong name or PIN.';
 const LOCKED = 'Too many wrong tries. Wait, or ask the superadmin to unlock you.';
 
@@ -307,11 +344,11 @@ async function forgetDevices(userId: string): Promise<void> {
   forgetCache();
 }
 
-/** Superadmin: clear a name's lock (e.g. someone was guessing at it). */
+/** Superadmin: clear a name's lock (e.g. someone was guessing at it), on every device. */
 export function unlockName(name: string): void {
   const key = nameKey(name);
-  nameTries.delete(key);
-  for (const k of pairTries.keys()) if (nameOfPair(k) === key) pairTries.delete(k);
+  nameTable.clear(key);
+  unlocks.set(key, (unlocks.get(key) ?? 0) + 1);
 }
 
 export async function login(
@@ -324,19 +361,17 @@ export async function login(
   const key = nameKey(String(nameIn ?? '')).slice(0, 60);
   const pin = String(pinIn ?? '').slice(0, 16);
   const device = deviceKey(ip);
-  const pair = `${device}|${key}`;
   const { names, devices } = await loadCache();
 
   // ---- from here to the first await below: no awaits, so tries sent at once are all counted
   const userId = names.get(key);
   const tokenHash = deviceToken && deviceToken.length <= 100 ? sha256(deviceToken) : null;
   const trusted = !!userId && !!tokenHash && devices.get(tokenHash) === userId;
-  const pairs = userId ? pairTries : madeUpTries;
-  const namesMap = userId ? nameTries : madeUpNameTries;
-  if (isLocked(pairs.get(pair), now)) throw new AccountError(LOCKED, 429);
-  if (!trusted && (isLocked(deviceTries.get(device), now) || isLocked(namesMap.get(key), now))) throw new AccountError(LOCKED, 429);
-  const pairLocked = countSimple(pairs, pair, MAX_TRIES, now);
-  const nameLocked = countName(namesMap, key, now); // trusted phones' wrong PINs count too (the lock just doesn't stop them)
+  const pk = pairKey(device, key);
+  if (pairTable.locked(pk, now)) throw new AccountError(LOCKED, 429);
+  if (!trusted && (isLocked(deviceTries.get(device), now) || nameTable.locked(key, now))) throw new AccountError(LOCKED, 429);
+  const pairLocked = pairTable.count(pk, now, MAX_TRIES, false);
+  const nameLocked = nameTable.count(key, now, MAX_NAME_TRIES, true); // trusted phones' wrong PINs count too (the lock just doesn't stop them)
   // A trusted cookie gets 5 wrong PINs in all, wherever they come from; then it's cancelled.
   const tokenSpent = trusted ? countSimple(tokenTries, tokenHash!, MAX_TRIES, now) : false;
   if (tokenSpent) devices.delete(tokenHash!);
@@ -358,9 +393,8 @@ export async function login(
   }
   if (tokenHash) tokenTries.delete(tokenHash);
   // Right PIN: give the tries back (the name keeps its lock level for a day).
-  pairTries.delete(pair);
-  const nt = nameTries.get(key);
-  if (nt && !isLocked(nt, now)) nt.n = 0;
+  pairTable.clear(pk);
+  nameTable.clearCount(key, now);
   const d = deviceTries.get(device);
   if (d && !isLocked(d, now)) d.n = Math.max(0, d.n - 1);
   if (pin.length < 6) throw new AccountError('PINs are 6 digits now: ask the superadmin for a new 6-digit PIN.', 403);

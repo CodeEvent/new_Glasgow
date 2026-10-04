@@ -229,6 +229,22 @@ describe.skipIf(!HAS_DB)('accounts API (PostgreSQL)', () => {
     }
   });
 
+  it('a flood of other names doesn’t reset a name’s count, real or made-up', async () => {
+    await setupSuperadmin();
+    setLoginTrackingCap(5);
+    try {
+      const tryName = (name: string, ip: string) => json(request(app).post('/api/app/login').set('x-forwarded-for', ip)).send({ name, pin: '000000' });
+      for (const name of ['Gio', 'Nobody']) {
+        for (let d = 0; d < 4; d++) for (let i = 0; i < (d === 3 ? 4 : 5); i++) await tryName(name, `10.7.${name.length}.${d}`); // 19 tries
+        for (let i = 0; i < 30; i++) await tryName(`Flood${name}${i}`, `10.7.200.${i}`);
+        expect((await tryName(name, '10.7.201.1')).status).toBe(401); // 20th
+        expect((await tryName(name, '10.7.201.2')).status).toBe(429); // locked: the count survived
+      }
+    } finally {
+      setLoginTrackingCap(10_000);
+    }
+  });
+
   it('a made-up name locks just like a real one (no hint about who exists)', async () => {
     await setupSuperadmin();
     const probe = async (name: string) => {
