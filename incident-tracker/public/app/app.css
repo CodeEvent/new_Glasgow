@@ -185,10 +185,7 @@ button:disabled { opacity: .5; cursor: default; }
 .search-row { display: flex; gap: .5rem; margin-top: .5rem; }
 .search-row input { margin: 0; font-size: 1.15rem; font-weight: 600; }
 .records { list-style: none; padding: 0; margin: 1rem 0 0; display: grid; gap: .6rem; }
-.records li { background: var(--card); border-radius: 12px; padding: 12px 14px; border-left: 6px solid var(--ok); box-shadow: 0 1px 2px rgb(0 0 0 / .06); }
-.records li.refused { border-left-color: var(--refused); }
-.records li.sent_away { border-left-color: var(--away); }
-.records li.ejected { border-left-color: var(--ejected); }
+.records li { background: var(--card); border-radius: 12px; padding: 12px 14px; box-shadow: 0 1px 2px rgb(0 0 0 / .06); }
 .records .seat { font-size: 1.15rem; font-weight: 800; }
 .records .tag { font-size: .75rem; font-weight: 800; padding: .1rem .45rem; border-radius: 6px; color: #fff; background: var(--ok); margin-left: .4rem; vertical-align: middle; }
 .records .refused .tag, .records li.refused .tag { background: var(--refused); }
