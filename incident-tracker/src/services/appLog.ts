@@ -227,6 +227,7 @@ export interface SeatRecord {
   back_at: string | null;
   reentries: number;
   party: number;
+  photos: number;
 }
 
 function toSeatRecord(r: RecordRow): SeatRecord {
@@ -242,6 +243,7 @@ function toSeatRecord(r: RecordRow): SeatRecord {
     back_at: r.current_status === 'cooling_off' && r.cool_down_until ? new Date(r.cool_down_until).toISOString() : null,
     reentries: r.breaches,
     party: r.party_size,
+    photos: r.photos,
   };
 }
 

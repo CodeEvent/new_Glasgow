@@ -40,6 +40,7 @@ export interface FeedItem {
   description: string;
   party: number;
   back_at: string | null;
+  photos: number;
   can_edit: boolean;
   can_delete: boolean;
 }
@@ -61,6 +62,7 @@ interface FeedRow {
   row_label: string | null;
   seat_number: string | null;
   only_mine: boolean;
+  photos: number;
 }
 
 const statusOf = (r: { current_status: string; reasoning: string }): FeedItem['status'] =>
@@ -75,7 +77,8 @@ export async function listFeed(user: AppUser, limit = 150): Promise<FeedItem[]> 
     `SELECT e.id, e.timestamp, e.ticket_id, e.hub_location, e.steward_name, e.is_breach_event,
             (SELECT count(*)::int FROM scan_events p WHERE p.ticket_id = e.ticket_id AND p.timestamp < e.timestamp) AS previous_logs,
             t.current_status, t.reasoning, t.description, t.party_size, t.cool_down_until, t.section, t.row_label, t.seat_number,
-            (SELECT bool_and(o.user_id IS NOT DISTINCT FROM $2::uuid) FROM scan_events o WHERE o.ticket_id = t.ticket_id) AS only_mine
+            (SELECT bool_and(o.user_id IS NOT DISTINCT FROM $2::uuid) FROM scan_events o WHERE o.ticket_id = t.ticket_id) AS only_mine,
+            (SELECT count(*)::int FROM ticket_photos ph WHERE ph.ticket_id = t.ticket_id) AS photos
        FROM scan_events e JOIN tickets t ON t.ticket_id = e.ticket_id
       ORDER BY e.timestamp DESC
       LIMIT $1`,
@@ -94,6 +97,7 @@ export async function listFeed(user: AppUser, limit = 150): Promise<FeedItem[]> 
     description: clean(r.description),
     party: r.party_size,
     back_at: r.current_status === 'cooling_off' && r.cool_down_until ? new Date(r.cool_down_until).toISOString() : null,
+    photos: r.photos,
     can_edit: can(user, 'edit', { ownerId: r.only_mine ? user.id : null }),
     can_delete: can(user, 'delete'),
   }));

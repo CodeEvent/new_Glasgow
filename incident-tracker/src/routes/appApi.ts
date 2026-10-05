@@ -33,6 +33,7 @@ import {
   startEvent,
 } from '../services/appDashboard';
 import { FeedError, appEvents, editRecord, listFeed, removeRecord, type AppEvent } from '../services/appFeed';
+import { PhotoError, addPhoto, deletePhoto, getPhoto, listPhotos } from '../services/appPhotos';
 import { can, type Action, type AppUser } from '../services/permissions';
 
 /**
@@ -70,7 +71,7 @@ function setSession(req: Request, res: Response, s: { token: string; deviceToken
 // Changes only as JSON (blocks cross-site form posts).
 appApiRouter.use((req, res, next) => {
   // A ticket photo or the seating plan (a cross-site form can't send an image type).
-  const photo = (req.path === '/scan-ticket' || req.path === '/map/image') && req.is('image/*');
+  const photo = (req.path === '/scan-ticket' || req.path === '/map/image' || /^\/records\/[^/]+\/photos$/.test(req.path)) && req.is('image/*');
   if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'DELETE' && !req.is('application/json') && !photo) {
     res.status(415).json({ ok: false, error: 'Send JSON' });
     return;
@@ -82,7 +83,7 @@ const wrap =
   (fn: (req: Request, res: Response) => Promise<void>) =>
   (req: Request, res: Response, next: NextFunction) =>
     fn(req, res).catch((err) => {
-      if (err instanceof AccountError || err instanceof LogError || err instanceof FeedError || err instanceof DashError) {
+      if (err instanceof AccountError || err instanceof LogError || err instanceof FeedError || err instanceof DashError || err instanceof PhotoError) {
         res.status(err.status).json({ ok: false, error: err.message });
         return;
       }
@@ -410,5 +411,45 @@ appApiRouter.delete(
   allow('settings'),
   wrap(async (req, res) => {
     res.json({ ok: true, blocks: await removeBlock(userOf(req), String(req.params.block)) });
+  }),
+);
+
+// ---------------------------------------------------------------- photos
+
+appApiRouter.post(
+  '/records/:id/photos',
+  allow(),
+  express.raw({ type: 'image/*', limit: '5mb' }),
+  wrap(async (req, res) => {
+    const photo = await addPhoto(userOf(req), String(req.params.id), req.query.kind, req.body, req.get('content-type') ?? '');
+    res.json({ ok: true, photo });
+  }),
+);
+
+appApiRouter.get(
+  '/records/:id/photos',
+  allow('view'),
+  wrap(async (req, res) => {
+    res.json({ ok: true, photos: await listPhotos(String(req.params.id)) });
+  }),
+);
+
+appApiRouter.get(
+  '/photos/:id',
+  allow('view'),
+  wrap(async (req, res) => {
+    const p = await getPhoto(String(req.params.id));
+    res.setHeader('content-type', p.mime);
+    res.setHeader('cache-control', 'private, max-age=600');
+    res.send(p.data);
+  }),
+);
+
+appApiRouter.delete(
+  '/photos/:id',
+  allow(),
+  wrap(async (req, res) => {
+    await deletePhoto(userOf(req), String(req.params.id));
+    res.json({ ok: true });
   }),
 );
