@@ -6,6 +6,7 @@ import { listRecords, type RecordRow } from './adminRecords';
 import type { AiHelper, DescriptionFields } from './aiAgent';
 import { normReason } from './aiAgent';
 import { createAiAgent } from './aiProvider';
+import { getAppSettings } from './appDashboard';
 import { emitAppEvent } from './appFeed';
 import { addCustomOption, cleanTerm, refreshCustomOptions } from './customOptions';
 import { appendOfflineIncident } from './offlineBuffer';
@@ -52,7 +53,8 @@ export function setTicketReader(fn: TicketReader): void {
 
 // ---------------------------------------------------------------- options
 
-export function logOptions() {
+export async function logOptions() {
+  const settings = await getAppSettings();
   return {
     reasons: [...REASONS],
     heights: [...HEIGHTS],
@@ -60,7 +62,9 @@ export function logOptions() {
     ages: [...AGES],
     hubs: [...HUBS],
     cool_off_minutes: getConfig().COOL_OFF_MINUTES,
-    ai: !!appAi()?.describe,
+    ai: settings.ai_enabled && !!appAi()?.describe,
+    venue_name: settings.venue_name,
+    policy: settings.policy,
     ocr: getConfig().OCR_ENABLED,
   };
 }
@@ -269,7 +273,7 @@ export async function searchRecords(qIn: unknown): Promise<SeatRecord[]> {
 
 export async function describeWithAi(textIn: unknown, user: AppUser): Promise<DescriptionFields> {
   const helper = appAi();
-  if (!helper?.describe) throw new LogError('The AI helper is off. Use the buttons.', 503);
+  if (!helper?.describe || !(await getAppSettings()).ai_enabled) throw new LogError('The AI helper is off. Use the buttons.', 503);
   const t = String(textIn ?? '').trim().slice(0, 600);
   if (t.length < 3) throw new LogError('Type a few words first.');
   const d = await helper.describe(t, `app:${user.id}`).catch(() => null);

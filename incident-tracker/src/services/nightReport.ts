@@ -13,7 +13,7 @@ const seatOf = (r: { section: string | null; row_label: string | null; seat_numb
   r.section ? `${r.section} ${r.row_label} ${r.seat_number}` : r.ticket_id;
 
 /** Reasons are stored as "Intoxicated, Abusive, Other: threw a bottle". */
-function reasonsOf(reasoning: string): string[] {
+export function reasonsOf(reasoning: string): string[] {
   if (!reasoning || reasoning === 'Not provided') return [];
   return reasoning
     .replace(/^Ejected:?\s*/, '')

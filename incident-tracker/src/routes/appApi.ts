@@ -15,6 +15,22 @@ import {
   updateUser,
 } from '../services/accounts';
 import { LogError, checkSeat, describeWithAi, logIncident, logOptions, scanTicket, searchRecords } from '../services/appLog';
+import {
+  DashError,
+  dashboard,
+  endEvent,
+  eventCsv,
+  eventReport,
+  getAppSettings,
+  getMapImage,
+  listEvents,
+  mapInfo,
+  putAppSettings,
+  putBlock,
+  putMapImage,
+  removeBlock,
+  startEvent,
+} from '../services/appDashboard';
 import { FeedError, appEvents, editRecord, listFeed, removeRecord, type AppEvent } from '../services/appFeed';
 import { can, type Action, type AppUser } from '../services/permissions';
 
@@ -52,7 +68,8 @@ function setSession(req: Request, res: Response, s: { token: string; deviceToken
 
 // Changes only as JSON (blocks cross-site form posts).
 appApiRouter.use((req, res, next) => {
-  const photo = req.path === '/scan-ticket' && req.is('image/*'); // a ticket photo (a cross-site form can't send this type)
+  // A ticket photo or the seating plan (a cross-site form can't send an image type).
+  const photo = (req.path === '/scan-ticket' || req.path === '/map/image') && req.is('image/*');
   if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'DELETE' && !req.is('application/json') && !photo) {
     res.status(415).json({ ok: false, error: 'Send JSON' });
     return;
@@ -64,7 +81,7 @@ const wrap =
   (fn: (req: Request, res: Response) => Promise<void>) =>
   (req: Request, res: Response, next: NextFunction) =>
     fn(req, res).catch((err) => {
-      if (err instanceof AccountError || err instanceof LogError || err instanceof FeedError) {
+      if (err instanceof AccountError || err instanceof LogError || err instanceof FeedError || err instanceof DashError) {
         res.status(err.status).json({ ok: false, error: err.message });
         return;
       }
@@ -177,9 +194,13 @@ appApiRouter.delete(
 
 const userOf = (req: Request) => (req as AuthedRequest).user;
 
-appApiRouter.get('/options', allow('view'), (_req, res) => {
-  res.json({ ok: true, ...logOptions() });
-});
+appApiRouter.get(
+  '/options',
+  allow('view'),
+  wrap(async (_req, res) => {
+    res.json({ ok: true, ...(await logOptions()) });
+  }),
+);
 
 appApiRouter.post(
   '/logs',
@@ -272,5 +293,121 @@ appApiRouter.delete(
   wrap(async (req, res) => {
     await removeRecord(userOf(req), String(req.params.id));
     res.json({ ok: true });
+  }),
+);
+
+// ---------------------------------------------------------------- dashboard, events, settings, map
+
+appApiRouter.get(
+  '/dashboard',
+  allow('dashboard'),
+  wrap(async (_req, res) => {
+    res.json({ ok: true, ...(await dashboard()) });
+  }),
+);
+
+appApiRouter.get(
+  '/events',
+  allow('events'),
+  wrap(async (_req, res) => {
+    res.json({ ok: true, events: await listEvents() });
+  }),
+);
+
+appApiRouter.post(
+  '/events/start',
+  allow('events'),
+  wrap(async (req, res) => {
+    res.json({ ok: true, event: await startEvent(userOf(req), req.body?.name) });
+  }),
+);
+
+appApiRouter.post(
+  '/events/end',
+  allow('events'),
+  wrap(async (req, res) => {
+    res.json({ ok: true, event: await endEvent(userOf(req)) });
+  }),
+);
+
+appApiRouter.get(
+  '/events/:id/report',
+  allow('events'),
+  wrap(async (req, res) => {
+    res.json({ ok: true, ...(await eventReport(String(req.params.id))) });
+  }),
+);
+
+appApiRouter.get(
+  '/events/:id/records.csv',
+  allow('events'),
+  wrap(async (req, res) => {
+    const { name, csv } = await eventCsv(String(req.params.id));
+    const safe = name.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'event';
+    res.setHeader('content-type', 'text/csv; charset=utf-8');
+    res.setHeader('content-disposition', `attachment; filename="gatekeeper-${safe}-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send(csv);
+  }),
+);
+
+appApiRouter.get(
+  '/settings',
+  allow('settings'),
+  wrap(async (_req, res) => {
+    res.json({ ok: true, settings: await getAppSettings() });
+  }),
+);
+
+appApiRouter.put(
+  '/settings',
+  allow('settings'),
+  wrap(async (req, res) => {
+    res.json({ ok: true, settings: await putAppSettings(userOf(req), req.body ?? {}) });
+  }),
+);
+
+appApiRouter.get(
+  '/map',
+  allow('dashboard'),
+  wrap(async (_req, res) => {
+    res.json({ ok: true, ...(await mapInfo()) });
+  }),
+);
+
+appApiRouter.get(
+  '/map/image',
+  allow('dashboard'),
+  wrap(async (_req, res) => {
+    const img = await getMapImage();
+    if (!img) throw new DashError('No plan uploaded yet.', 404);
+    res.setHeader('content-type', img.mime);
+    res.setHeader('cache-control', 'private, max-age=300');
+    res.send(img.data);
+  }),
+);
+
+appApiRouter.put(
+  '/map/image',
+  allow('settings'),
+  express.raw({ type: 'image/*', limit: '10mb' }),
+  wrap(async (req, res) => {
+    await putMapImage(userOf(req), req.body, req.get('content-type') ?? '');
+    res.json({ ok: true });
+  }),
+);
+
+appApiRouter.put(
+  '/map/blocks/:block',
+  allow('settings'),
+  wrap(async (req, res) => {
+    res.json({ ok: true, blocks: await putBlock(userOf(req), String(req.params.block), req.body ?? {}) });
+  }),
+);
+
+appApiRouter.delete(
+  '/map/blocks/:block',
+  allow('settings'),
+  wrap(async (req, res) => {
+    res.json({ ok: true, blocks: await removeBlock(userOf(req), String(req.params.block)) });
   }),
 );
