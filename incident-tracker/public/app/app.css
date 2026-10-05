@@ -68,6 +68,8 @@ input, select {
 input:focus-visible, select:focus-visible, button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 
 button { font: inherit; cursor: pointer; border: 0; border-radius: 12px; min-height: 48px; padding: 0 1.1rem; }
+/* Quick repeated taps (a PIN like 000000) must each count, not turn into a double-tap zoom. */
+button, .keypad, .chips, .seg { touch-action: manipulation; }
 .primary { background: var(--primary); color: var(--primary-text); font-weight: 700; }
 .primary.big { width: 100%; margin-top: 1.25rem; min-height: 56px; }
 .ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
@@ -87,7 +89,8 @@ button { font: inherit; cursor: pointer; border: 0; border-radius: 12px; min-hei
 .login { text-align: center; }
 .login .logo { width: 64px; height: 64px; }
 .login label { text-align: left; }
-.pin-dots { display: flex; justify-content: center; gap: .6rem; margin: 1.2rem 0 .8rem; min-height: 16px; }
+.pin-dots { display: flex; justify-content: center; gap: .6rem; margin: 1.2rem 0 .3rem; min-height: 16px; }
+.pin-hint { margin: 0 0 .8rem; text-align: center; }
 .pin-dots i { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--muted); display: none; }
 .pin-dots i.show { display: block; }
 .pin-dots i.on { background: var(--text); border-color: var(--text); }

@@ -110,7 +110,7 @@ function loginView() {
   nameInput.value = remembered();
   let pin = '';
   const draw = () => dots.forEach((d, i) => {
-    d.classList.toggle('show', i < Math.max(4, pin.length));
+    d.classList.toggle('show', i < Math.max(6, pin.length));
     d.classList.toggle('on', i < pin.length);
   });
   draw();

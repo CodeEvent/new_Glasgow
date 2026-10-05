@@ -1,6 +1,6 @@
 // Keeps the app's own files on the phone so it opens without signal. Never stores API answers
 // (records stay on the server); logs made offline are queued by the page itself.
-const CACHE = 'gk-app-v1';
+const CACHE = 'gk-app-v2';
 const SHELL = ['/app/', '/app/app.js', '/app/app.css', '/app/icon.svg', '/app/manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
