@@ -61,6 +61,9 @@ const envObject = z.object({
   WA_LINKED_POST_ALERTS: boolFlag,
   // Group bot extras (each can be switched off with "off"):
   // post 🚨 when someone tries a second hub, and 🟡 when a sent-away person may come back.
+  // The older routes without logins (/api/scan, /api/tickets/*, the Cloud API webhook, the old intake
+  // form). Off on the phone, where the app is published through a tunnel and replaces them.
+  LEGACY_API: onByDefault,
   WA_HUBHOP_ALERTS: onByDefault,
   WA_READMIT_REMINDERS: onByDefault,
   // CLEAR and REPORT only for WhatsApp admins of a selected group ("off" = anyone in the group).

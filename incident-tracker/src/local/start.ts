@@ -23,6 +23,8 @@ Object.assign(process.env, {
   DATABASE_URL: 'pglite://local', // placeholder: the embedded database below is used instead
   // The Gatekeeper app replaces the WhatsApp bot; it can still be switched back on (gk-set WA_LINKED_ENABLED true).
   WA_LINKED_ENABLED: process.env.WA_LINKED_ENABLED ?? 'false',
+  // The app is published through a tunnel, so the older routes without logins are not served.
+  LEGACY_API: 'false',
   // Records (with descriptions) are kept 30 days; each event's final numbers are kept for good.
   RETENTION_HOURS: process.env.RETENTION_HOURS ?? '720',
   // The tunnel on the phone writes the app's public address here (shown in Settings with a QR code).
@@ -30,7 +32,7 @@ Object.assign(process.env, {
   ADMIN_API_KEY: adminKey,
   OFFLINE_LOG_PATH: path.join(DATA, 'offline_incidents.log'),
   PORT: process.env.PORT ?? '3000',
-  // Only this computer can reach the server: nobody else on the Wi-Fi can open the setup page or the API.
+  // Listens on this phone only; other phones reach it through the tunnel (gk-url), which forwards to here.
   HOST: process.env.HOST ?? '127.0.0.1',
 });
 // Never pick up cloud WhatsApp settings from a .env file in local mode.

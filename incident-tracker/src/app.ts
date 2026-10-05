@@ -45,9 +45,12 @@ export function createApp(opts: { extend?: (app: express.Express) => void } = {}
     }
   });
 
+  const legacy = getConfig().LEGACY_API;
   app.use('/api/app', appApiRouter);
-  app.use('/api', scanRouter);
-  app.use('/api/whatsapp', whatsappWebhookRouter);
+  if (legacy) {
+    app.use('/api', scanRouter);
+    app.use('/api/whatsapp', whatsappWebhookRouter);
+  }
   app.use('/admin', adminRouter);
 
   opts.extend?.(app);
@@ -58,6 +61,11 @@ export function createApp(opts: { extend?: (app: express.Express) => void } = {}
   });
 
   // Steward intake form (mobile web app).
+  if (!legacy) {
+    // No old intake form: the home page is the app.
+    app.get('/', (_req, res) => res.redirect(302, '/app/'));
+    app.get('/index.html', (_req, res) => res.status(404).json({ ok: false, error: 'Not found' }));
+  }
   app.use(express.static(path.resolve(__dirname, '..', 'public'), { maxAge: '5m' }));
 
   app.use((_req, res) => {
