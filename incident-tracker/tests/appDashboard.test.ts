@@ -1,3 +1,6 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
@@ -122,6 +125,22 @@ describe.skipIf(!HAS_DB)('dashboard, events and settings (PostgreSQL)', () => {
     expect((await json(gio.put('/api/app/settings')).send({ policy: 'x'.repeat(5000) })).status).toBe(400);
     const audit = (await getPool().query("SELECT detail FROM audit_log WHERE action = 'settings_changed'")).rows;
     expect(audit).toHaveLength(1);
+  });
+
+  it('Settings shows the app’s public address with a QR code to share', async () => {
+    expect((await gio.get('/api/app/settings')).body.public_url).toBeNull();
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'gk-url-')), 'url.txt');
+    fs.writeFileSync(file, 'https://blue-cat-123.trycloudflare.com\n');
+    process.env.PUBLIC_URL_FILE = file;
+    try {
+      const s = (await gio.get('/api/app/settings')).body;
+      expect(s.public_url).toBe('https://blue-cat-123.trycloudflare.com/app/');
+      expect(s.public_qr).toMatch(/^data:image\/png;base64,/);
+      fs.writeFileSync(file, 'not a url');
+      expect((await gio.get('/api/app/settings')).body.public_url).toBeNull();
+    } finally {
+      delete process.env.PUBLIC_URL_FILE;
+    }
   });
 
   it('seating map: the superadmin uploads the plan and places sections; seniors see it with counts', async () => {

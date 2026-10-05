@@ -1,3 +1,5 @@
+import fs from 'fs';
+import QRCode from 'qrcode';
 import { getSetting, setSetting } from '../channels/pgAuthState';
 import { getConfig } from '../config/env';
 import { HUBS } from '../domain';
@@ -214,6 +216,23 @@ export async function putAppSettings(user: AppUser, body: { policy?: unknown; ai
   const changed = (['policy', 'ai_enabled', 'venue_name'] as const).filter((k) => next[k] !== cur[k]);
   if (changed.length) await audit(user, 'settings_changed', changed.join(', '));
   return next;
+}
+
+/**
+ * The address stewards open, written by the tunnel on the phone (PUBLIC_URL_FILE), with a QR code.
+ * A quick Cloudflare tunnel gets a new address when the phone restarts, so it's read each time.
+ */
+export async function publicAddress(): Promise<{ public_url: string | null; public_qr: string | null }> {
+  const file = process.env.PUBLIC_URL_FILE;
+  let base = '';
+  try {
+    base = file ? fs.readFileSync(file, 'utf8').trim() : '';
+  } catch {
+    /* no tunnel yet */
+  }
+  if (!/^https:\/\/[a-z0-9.-]+(:\d+)?\/?$/i.test(base)) return { public_url: null, public_qr: null };
+  const url = `${base.replace(/\/$/, '')}/app/`;
+  return { public_url: url, public_qr: await QRCode.toDataURL(url, { margin: 1, width: 320 }) };
 }
 
 // ---------------------------------------------------------------- seating map

@@ -1,5 +1,7 @@
 # Gatekeeper on WhatsApp: setup guide
 
+> **Now replaced by the Gatekeeper app** (see [APP_GUIDE.md](APP_GUIDE.md)). On the phone the WhatsApp bot is off by default; `gk-set WA_LINKED_ENABLED true` switches it back on as a backup.
+
 Stewards log and check refused patrons entirely inside your **work WhatsApp group**. A spare phone number sits in the group as the bot.
 
 | A steward sends | Gatekeeper replies |

@@ -995,6 +995,16 @@ async function settingsView() {
   const r = await api('/settings');
   if (!r.ok) return toast(r.error);
   const st = r.settings;
+  body.append(block('Share the app',
+    r.public_url
+      ? el('div', {},
+          el('p', { text: 'Supervisors open this address (or scan the code), log in, then “Add to Home Screen”.' }),
+          el('p', {}, el('strong', { text: r.public_url })),
+          el('img', { src: r.public_qr, alt: `QR code for ${r.public_url}`, style: 'width:220px;height:220px;display:block;margin:.5rem auto;border-radius:8px;background:#fff;padding:6px' }),
+          /trycloudflare\.com/.test(r.public_url)
+            ? el('p', { class: 'muted hint', text: 'Free quick address: it changes when the phone restarts. For a fixed one, see the guide (TUNNEL_TOKEN).' })
+            : null)
+      : el('p', { class: 'muted', text: 'No public address yet: only this phone can open the app. On the phone, run gk-url.' })));
   const venue = el('input', { maxlength: '60', value: st.venue_name, placeholder: 'e.g. The Hydro' });
   const policy = el('textarea', { rows: '6', maxlength: '4000', placeholder: 'e.g. Under 18s with alcohol: refuse and call a senior supervisor.' });
   policy.value = st.policy;

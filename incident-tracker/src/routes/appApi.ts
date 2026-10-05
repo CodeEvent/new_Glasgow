@@ -25,6 +25,7 @@ import {
   getMapImage,
   listEvents,
   mapInfo,
+  publicAddress,
   putAppSettings,
   putBlock,
   putMapImage,
@@ -354,7 +355,7 @@ appApiRouter.get(
   '/settings',
   allow('settings'),
   wrap(async (_req, res) => {
-    res.json({ ok: true, settings: await getAppSettings() });
+    res.json({ ok: true, settings: await getAppSettings(), ...(await publicAddress()) });
   }),
 );
 

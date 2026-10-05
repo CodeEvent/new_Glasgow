@@ -21,7 +21,12 @@ const adminKey = fs.readFileSync(keyFile, 'utf8').trim();
 Object.assign(process.env, {
   NODE_ENV: process.env.NODE_ENV ?? 'production',
   DATABASE_URL: 'pglite://local', // placeholder: the embedded database below is used instead
-  WA_LINKED_ENABLED: 'true',
+  // The Gatekeeper app replaces the WhatsApp bot; it can still be switched back on (gk-set WA_LINKED_ENABLED true).
+  WA_LINKED_ENABLED: process.env.WA_LINKED_ENABLED ?? 'false',
+  // Records (with descriptions) are kept 30 days; each event's final numbers are kept for good.
+  RETENTION_HOURS: process.env.RETENTION_HOURS ?? '720',
+  // The tunnel on the phone writes the app's public address here (shown in Settings with a QR code).
+  PUBLIC_URL_FILE: process.env.PUBLIC_URL_FILE ?? path.join(DATA, 'url.txt'),
   ADMIN_API_KEY: adminKey,
   OFFLINE_LOG_PATH: path.join(DATA, 'offline_incidents.log'),
   PORT: process.env.PORT ?? '3000',
