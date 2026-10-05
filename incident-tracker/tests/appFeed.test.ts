@@ -107,6 +107,9 @@ describe.skipIf(!HAS_DB)('live feed, alerts and editing (PostgreSQL)', () => {
     expect((await edit({ status: 'refused' })).status).toBe(403); // less serious
     expect((await edit({ status: 'sent_away' })).status).toBe(403);
     expect((await ticket('56')).reasoning).toMatch(/^Ejected/);
+    // Editing just the reason keeps it ejected (the mark can't be dropped that way)
+    expect((await edit({ reasoning: 'Abusive' })).status).toBe(200);
+    expect((await ticket('56')).reasoning).toBe('Ejected: Abusive');
     // A senior logs over it: it's no longer only Amy's
     await log(sam, { hub: 'East Hub', reasons: ['Abusive'] });
     expect((await edit({ description: 'x' })).status).toBe(403);

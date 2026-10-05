@@ -20,6 +20,7 @@
   <button class="link" id="logoutBtn" type="button">Log out</button>
 </header>
 
+<div class="alerts" id="alerts" aria-live="assertive"></div>
 <main id="view" aria-live="polite"></main>
 <div class="toast" id="toast" role="status" hidden></div>
 
@@ -183,6 +184,38 @@
     </form>
     <p class="muted hint">A whole section (<strong>313</strong>), a row (<strong>313 L</strong>), a seat, or words from a description.</p>
     <div data-results></div>
+  </section>
+</template>
+
+<template id="tpl-feed">
+  <section>
+    <div class="row-between"><h1>Live feed <span class="live-dot" data-live title="Live"></span></h1><button class="link" data-back type="button">← Home</button></div>
+    <div class="chips" data-filters></div>
+    <ul class="records feed" data-items></ul>
+    <p class="muted hint" data-empty hidden>Nothing logged yet.</p>
+  </section>
+</template>
+
+<template id="tpl-edit">
+  <section class="log">
+    <div class="row-between"><h1 data-title>Change</h1><button class="link" data-back type="button">← Feed</button></div>
+    <div class="block">
+      <h2>Status</h2>
+      <div class="chips" data-status></div>
+    </div>
+    <div class="block">
+      <label>Reasons<input data-reasoning maxlength="2000"></label>
+      <label>Description<input data-description maxlength="2000"></label>
+      <div class="party">People in the group
+        <button type="button" class="ghost round" data-party-minus aria-label="Fewer">−</button>
+        <strong data-party>1</strong>
+        <button type="button" class="ghost round" data-party-plus aria-label="More">+</button>
+      </div>
+    </div>
+    <div class="row-gap">
+      <button type="button" class="primary big" data-save>Save changes</button>
+      <button type="button" class="danger big" data-delete hidden>Delete this record</button>
+    </div>
   </section>
 </template>
 

@@ -21,6 +21,7 @@ async function api(path, opts = {}) {
   });
   const data = await res.json().catch(() => ({ ok: false, error: 'No connection. Try again.' }));
   if (res.status === 401 && !opts.allow401) {
+    disconnectStream();
     me = null;
     route();
 
@@ -167,7 +168,7 @@ function homeView() {
   tiles.append(
     tile('➕', 'Log someone', me.role === 'area' ? `Refused, 30 min or ejected at ${area(me.hub)}` : 'Refused, 30 min or ejected', { wide: true, go: () => go('log') }),
     tile('🔎', 'Check a seat', 'Is this ticket on record?', { go: () => go('check') }),
-    tile('📡', 'Live feed', soon),
+    tile('📡', 'Live feed', 'Every log, all areas, as it happens', { go: () => go('feed') }),
   );
   if (isAdmin()) tiles.append(tile('📊', 'Dashboard', soon), tile('🏁', 'Events & reports', soon));
   if (me.role === 'superadmin') tiles.append(tile('👥', 'People', 'Add people, PINs, roles', { go: () => go('people') }), tile('⚙️', 'Settings', soon));
@@ -667,6 +668,180 @@ function checkView() {
   q.focus();
 }
 
+// ---------------------------------------------------------------- alerts pushed from the server
+
+let stream = null;
+let audioCtx = null;
+// Phones only allow sound after a tap: get ready on the first one.
+document.addEventListener('pointerdown', () => {
+  try {
+    audioCtx ??= new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  } catch { /* no sound on this phone */ }
+}, { once: false, passive: true });
+
+function beep(times = 2) {
+  if (!audioCtx) return;
+  for (let i = 0; i < times; i++) {
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.frequency.value = 880;
+    o.connect(g).connect(audioCtx.destination);
+    const t = audioCtx.currentTime + i * 0.35;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.4, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+    o.start(t);
+    o.stop(t + 0.3);
+  }
+}
+
+function banner(kind, title, sub, autoCloseMs) {
+  const box = $('#alerts');
+  const b = el('div', { class: `banner ${kind}`, role: 'alert' },
+    el('span', {}, document.createTextNode(title), sub ? el('small', { text: sub }) : null),
+    el('button', { type: 'button', text: '✕', 'aria-label': 'Close', onclick: () => b.remove() }));
+  box.prepend(b);
+  while (box.children.length > 4) box.lastChild.remove();
+  if (autoCloseMs) setTimeout(() => b.remove(), autoCloseMs);
+}
+
+let feedRefresh = null; // set while the feed is on screen
+function connectStream() {
+  if (stream || !me || !window.EventSource) return;
+  stream = new EventSource('/api/app/stream');
+  const live = (on) => document.querySelectorAll('[data-live]').forEach((d) => d.classList.toggle('on', on));
+  stream.onopen = () => live(true);
+  stream.onerror = () => {
+    live(false);
+    if (!me) disconnectStream();
+  };
+  stream.addEventListener('log', (e) => {
+    const d = JSON.parse(e.data);
+    if (d.reentry) {
+      banner('reentry', `🚨 ${d.seat} tried to get back in at ${area(d.hub)}`, `First at ${area(d.first_hub)}. ${STATUS[d.status] || ''}: do not admit. Logged by ${d.by}.`);
+      beep(3);
+      if (navigator.vibrate) navigator.vibrate([300, 120, 300, 120, 300]);
+    }
+    feedRefresh?.();
+  });
+  stream.addEventListener('readmit', (e) => {
+    const d = JSON.parse(e.data);
+    banner('readmit', `🟡 ${d.seat} may now be readmitted if fit`, d.hub ? `Sent away at ${area(d.hub)}.` : '', 120000);
+    beep(1);
+    feedRefresh?.();
+  });
+  stream.addEventListener('change', () => feedRefresh?.());
+}
+function disconnectStream() {
+  stream?.close();
+  stream = null;
+}
+
+// ---------------------------------------------------------------- live feed
+
+async function feedView() {
+  const root = show('#tpl-feed');
+  $('[data-back]', root).onclick = () => go('');
+  if (stream?.readyState === 1) $('[data-live]', root).classList.add('on');
+  const list = $('[data-items]', root);
+  let filter = store.get('gk_feed_filter', 'all');
+  const filters = [['all', 'All'], ...(me.hub ? [['mine', `${area(me.hub)} only`]] : []), ['reentry', '🚨 Re-entries']];
+  const host = $('[data-filters]', root);
+  const drawFilters = () =>
+    host.replaceChildren(...filters.map(([v, label]) => el('button', { type: 'button', 'aria-pressed': String(filter === v), text: label, onclick: () => {
+      filter = v;
+      store.set('gk_feed_filter', v);
+      drawFilters();
+      draw();
+    } })));
+  drawFilters();
+
+  let items = [];
+  function draw() {
+    const shown = items.filter((i) => filter === 'all' || (filter === 'mine' && i.hub === me.hub) || (filter === 'reentry' && i.reentry));
+    $('[data-empty]', root).hidden = shown.length > 0;
+    list.replaceChildren(...shown.map((i) =>
+      el('li', { class: `${i.status}${i.reentry ? ' reentry-item' : ''}` },
+        el('div', { class: 'item-head' },
+          el('span', { class: 'time', text: clock(i.at) }),
+          el('span', { class: 'seat', text: i.seat }),
+          el('span', { class: 'tag', text: STATUS[i.status] })),
+        i.reentry ? el('span', { class: 're', text: '🚨 RE-ENTRY ATTEMPT' }) : null,
+        i.reasoning ? el('div', { text: i.reasoning }) : null,
+        i.description ? el('div', { text: `👤 ${i.description}` }) : null,
+        el('small', { text: [`${area(i.hub)} · ${i.by}`, i.party > 1 ? `group of ${i.party}` : '', i.back_at && minsUntil(i.back_at) ? `back ${clock(i.back_at)} (${minsUntil(i.back_at)} min)` : ''].filter(Boolean).join(' · ') }),
+        i.can_edit || i.can_delete
+          ? el('div', { class: 'actions' }, el('button', { class: 'ghost', type: 'button', text: '✏️ Change', onclick: () => editView(i) }))
+          : null)));
+  }
+  async function load() {
+    const r = await api('/feed');
+    if (!r.ok) return;
+    items = r.items;
+    draw();
+  }
+  let pending = null;
+  feedRefresh = () => {
+    clearTimeout(pending);
+    pending = setTimeout(load, 300);
+  };
+  await load();
+}
+
+/** Back to the feed (the address may already be the feed's, so redraw it directly). */
+const backToFeed = () => (location.hash === '#/feed' ? route() : go('feed'));
+
+function editView(item) {
+  feedRefresh = null;
+  const root = show('#tpl-edit');
+  $('[data-title]', root).textContent = `Change ${item.seat}`;
+  $('[data-back]', root).onclick = () => backToFeed();
+  const state = { status: item.status, party: item.party };
+  // Area supervisors can only make a record more serious (sent away < refused < ejected).
+  const RANK = { admitted: 0, sent_away: 1, refused: 2, ejected: 3 };
+  const statuses = [['sent_away', '🟠 Sent away'], ['refused', '🔴 Refused'], ['ejected', '⛔ Ejected'], ...(item.can_delete ? [['admitted', '🟢 Cleared to enter']] : [])]
+    .filter(([v]) => item.can_delete || RANK[v] >= RANK[item.status]);
+  const host = $('[data-status]', root);
+  const draw = () => host.replaceChildren(...statuses.map(([v, label]) => el('button', { type: 'button', 'aria-pressed': String(state.status === v), text: label, onclick: () => {
+    state.status = v;
+    draw();
+  } })));
+  draw();
+  const reasonIn = $('[data-reasoning]', root);
+  const descIn = $('[data-description]', root);
+  reasonIn.value = item.reasoning.replace(/^Ejected:?\s*/, '');
+  descIn.value = item.description;
+  const partyEl = $('[data-party]', root);
+  partyEl.textContent = state.party;
+  $('[data-party-minus]', root).onclick = () => { state.party = Math.max(1, state.party - 1); partyEl.textContent = state.party; };
+  $('[data-party-plus]', root).onclick = () => { state.party = Math.min(50, state.party + 1); partyEl.textContent = state.party; };
+
+  $('[data-save]', root).onclick = async () => {
+    const body = {};
+    if (state.status !== item.status) body.status = state.status;
+    if (reasonIn.value.trim() !== item.reasoning.replace(/^Ejected:?\s*/, '')) body.reasoning = reasonIn.value.trim();
+    if (descIn.value.trim() !== item.description) body.description = descIn.value.trim();
+    if (state.party !== item.party) body.party = state.party;
+    if (!Object.keys(body).length) return backToFeed();
+    const r = await api(`/records/${encodeURIComponent(item.ticket_id)}`, { method: 'PATCH', body });
+    if (!r.ok) return toast(r.error);
+    toast(`${item.seat} saved.`);
+    backToFeed();
+  };
+  if (item.can_delete) {
+    const del = $('[data-delete]', root);
+    del.hidden = false;
+    del.onclick = async () => {
+      if (!confirm(`Delete the record for ${item.seat}? This can’t be undone.`)) return;
+      const r = await api(`/records/${encodeURIComponent(item.ticket_id)}`, { method: 'DELETE' });
+      if (!r.ok) return toast(r.error);
+      toast(`${item.seat} deleted.`);
+      backToFeed();
+    };
+  }
+}
+
 // ---------------------------------------------------------------- routing
 
 function go(page) {
@@ -683,10 +858,16 @@ async function route() {
     }
   }
   setHeader();
+  connectStream();
+  feedRefresh = null;
   const page = location.hash.replace(/^#\/?/, '');
   if (page === 'people' && me.role === 'superadmin') return peopleView();
   if (page === 'log') return logView();
   if (page === 'check') return checkView();
+  if (page === 'feed') {
+    connectStream();
+    return feedView();
+  }
   homeView();
   flushQueue();
 }
@@ -702,6 +883,8 @@ $('#logoutBtn').addEventListener('click', async () => {
     }
   }
   await api('/logout', { method: 'POST', body: {}, allow401: true });
+  disconnectStream();
+  $('#alerts').replaceChildren();
   me = null;
   $('#toast').hidden = true;
   go('');

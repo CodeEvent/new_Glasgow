@@ -150,7 +150,11 @@ export async function editRecord(
   }
   if (status === undefined && reasoning === undefined && description === undefined && party === undefined) throw new FeedError('Nothing to change.');
 
-  // Ejected is stored as refused with "Ejected: " in front of the reasons.
+  // Ejected is stored as refused with "Ejected: " in front of the reasons. Editing only the reason
+  // keeps that mark: the status changes only when a status is chosen.
+  if (status === undefined && reasoning !== undefined && statusOf(rec) === 'ejected') {
+    reasoning = `Ejected: ${reasoning.replace(/^Ejected:?\s*/, '')}`.replace(/: $/, '');
+  }
   if (status === 'ejected' || status === 'refused') {
     const base = (reasoning ?? rec.reasoning).replace(/^Ejected:?\s*/, '');
     reasoning = status === 'ejected' ? `Ejected: ${base}`.replace(/: $/, '') : base || 'Not provided';
