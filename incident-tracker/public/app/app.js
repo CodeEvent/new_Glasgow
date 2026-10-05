@@ -164,15 +164,23 @@ function homeView() {
     el('button', { class: `tile${opts.wide ? ' wide' : ''}`, type: 'button', disabled: !opts.go, onclick: opts.go },
       el('span', { class: 'icon', text: icon, 'aria-hidden': 'true' }),
       el('span', {}, el('strong', { text: title }), el('small', { text: sub })));
-  const soon = 'Coming in the next update';
   tiles.append(
     tile('➕', 'Log someone', me.role === 'area' ? `Refused, 30 min or ejected at ${area(me.hub)}` : 'Refused, 30 min or ejected', { wide: true, go: () => go('log') }),
     tile('🔎', 'Check a seat', 'Is this ticket on record?', { go: () => go('check') }),
     tile('📡', 'Live feed', 'Every log, all areas, as it happens', { go: () => go('feed') }),
   );
-  if (isAdmin()) tiles.append(tile('📊', 'Dashboard', soon), tile('🏁', 'Events & reports', soon));
-  if (me.role === 'superadmin') tiles.append(tile('👥', 'People', 'Add people, PINs, roles', { go: () => go('people') }), tile('⚙️', 'Settings', soon));
-  for (const b of tiles.querySelectorAll('.tile[disabled] small')) if (b.textContent === soon) b.closest('.tile').title = soon;
+  if (isAdmin()) {
+    tiles.append(
+      tile('📊', 'Dashboard', 'Live numbers, charts, map', { go: () => go('dashboard') }),
+      tile('🏁', 'Events & reports', 'Start, end, final numbers', { go: () => go('events') }),
+    );
+  }
+  if (me.role === 'superadmin') {
+    tiles.append(
+      tile('👥', 'People', 'Add people, PINs, roles', { go: () => go('people') }),
+      tile('⚙️', 'Settings', 'Policy, AI, seating plan', { go: () => go('settings') }),
+    );
+  }
 }
 
 // ---------------------------------------------------------------- people (superadmin)
@@ -392,6 +400,12 @@ async function logView() {
   if (!opts) return homeView();
   const root = show('#tpl-log');
   $('[data-back]', root).onclick = () => go('');
+  if (opts.policy) {
+    $('.log', root).insertBefore(
+      el('details', { class: 'block policy' }, el('summary', { text: '📋 Refusal policy' }), el('p', { text: opts.policy, style: 'white-space:pre-wrap;margin:.5rem 0 0' })),
+      $('.log .block', root),
+    );
+  }
   $('[data-cool]', root).textContent = `${opts.cool_off_minutes} min`;
 
   const state = { decision: null, hub: me.role === 'area' ? me.hub : store.get('gk_hub', null), reasons: [], gender: null, height: null, build: null, age: null, party: 1, ticket_code: null };
@@ -842,6 +856,196 @@ function editView(item) {
   }
 }
 
+// ---------------------------------------------------------------- dashboard, events, settings
+
+function page(title) {
+  const root = show('#tpl-page');
+  $('[data-title]', root).textContent = title;
+  $('[data-back]', root).onclick = () => go('');
+  return $('[data-body]', root);
+}
+const block = (title, ...children) => el('div', { class: 'block' }, el('h2', { text: title }), ...children);
+const dateTime = (iso) => new Date(iso).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+function bars(entries) {
+  const max = Math.max(1, ...entries.map(([, n]) => n));
+  return el('div', { class: 'bars' }, ...entries.map(([label, n]) =>
+    el('div', { class: 'bar-row' },
+      el('span', { text: label }),
+      el('span', { class: 'track' }, el('span', { class: 'fill', style: `width:${(n / max) * 100}%; display:block` })),
+      el('b', { text: String(n) }))));
+}
+
+/** Counters, charts and (when there is a plan) the map, for the dashboard and event reports. */
+async function renderSummary(host, s, withMap) {
+  const c = s.counts;
+  const counter = (cls, n, label) => el('div', { class: `counter ${cls}` }, el('b', { text: String(n) }), el('span', { text: label }));
+  host.append(el('div', { class: 'counters' },
+    counter('refused', c.refused, 'Refused'),
+    counter('ejected', c.ejected, 'Ejected'),
+    counter('away', c.away_now, `Sent away now${c.back_soon ? ` · ${c.back_soon} back soon` : ''}`),
+    counter('refused', c.reentries, 'Re-entry attempts'),
+    counter('', c.logged, 'Logged'),
+    counter('', c.people, 'People'),
+    counter('', c.minors, 'Minors'),
+    counter('ok', c.cleared, 'Cleared')));
+  host.append(block('By area', bars(Object.entries(s.by_hub).map(([h, n]) => [area(h), n]))));
+  if (s.by_reason.length) host.append(block('By reason', bars(s.by_reason.slice(0, 8).map((r) => [r.reason, r.count]))));
+  const maxH = Math.max(1, ...s.by_hour.map((h) => h.count));
+  host.append(block('By hour', el('div', { class: 'hours' }, ...s.by_hour.map((h) =>
+    el('div', { class: 'col', title: `${h.hour}: ${h.count}` },
+      h.count ? el('b', { text: String(h.count) }) : null,
+      el('i', { style: `height:${(h.count / maxH) * 85}%` }),
+      el('span', { text: h.hour.slice(0, 2) }))))));
+  if (!withMap) return;
+  const m = await api('/map');
+  if (!m.ok) return;
+  if (!m.has_image) {
+    host.append(block('Seating map', el('p', { class: 'muted', text: me.role === 'superadmin' ? 'Add the seating plan in Settings to see sections light up here.' : 'The superadmin can add the seating plan in Settings.' })));
+    return;
+  }
+  host.append(block('Seating map', planView(m.blocks, s.sections)));
+}
+
+/** The plan image with a dot per placed section (red: refused/ejected, orange: sent away). */
+function planView(blocks, sections, onTap) {
+  const plan = el('div', { class: `plan${onTap ? ' editing' : ''}` }, el('img', { src: `/api/app/map/image?v=${Date.now()}`, alt: 'Seating plan' }));
+  for (const [name, pos] of Object.entries(blocks)) {
+    const c = sections?.[name];
+    const cls = !c || !c.total ? 'empty' : c.refused + c.ejected ? 'refused' : c.away ? 'away' : '';
+    const dot = el('span', { class: `dot ${cls}`, style: `left:${pos.x * 100}%; top:${pos.y * 100}%`, title: c ? `${name}: ${c.total} logged` : name, text: c?.total ? `${name} · ${c.total}` : name });
+    if (onTap) dot.addEventListener('click', (e) => { e.stopPropagation(); onTap({ remove: name }); });
+    plan.append(dot);
+  }
+  if (onTap) {
+    plan.addEventListener('click', (e) => {
+      const r = plan.getBoundingClientRect();
+      onTap({ x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height });
+    });
+  }
+  return plan;
+}
+
+async function dashboardView() {
+  const body = page('Dashboard');
+  async function load() {
+    const d = await api('/dashboard');
+    if (!d.ok) return;
+    const head = d.event
+      ? el('div', { class: 'event-bar running' }, el('span', {}, document.createTextNode(`🏁 ${d.event.name}`), el('small', { text: `Running since ${clock(d.event.started_at)}` })),
+          el('button', { class: 'ghost', type: 'button', text: 'Events', style: 'color:#fff;border-color:#475569', onclick: () => go('events') }))
+      : el('div', { class: 'event-bar' }, el('span', {}, document.createTextNode('No event running'), el('small', { text: 'Showing the last 12 hours' })),
+          el('button', { class: 'primary', type: 'button', text: 'Start an event', onclick: () => go('events') }));
+    const fresh = el('div');
+    fresh.append(head);
+    await renderSummary(fresh, d, true);
+    body.replaceChildren(fresh);
+  }
+  let pending = null;
+  feedRefresh = () => { clearTimeout(pending); pending = setTimeout(load, 500); };
+  await load();
+}
+
+async function eventsView() {
+  const body = page('Events & reports');
+  async function load() {
+    const r = await api('/events');
+    if (!r.ok) return;
+    const running = r.events.find((e) => !e.ended_at);
+    const nameIn = el('input', { maxlength: '80', placeholder: 'e.g. Celtic v Rangers', 'aria-label': 'Event name' });
+    const top = running
+      ? block('Running now', el('p', { text: `🏁 ${running.name}, since ${dateTime(running.started_at)} (started by ${running.started_by})` }),
+          el('button', { class: 'danger big', type: 'button', text: 'End the event and keep the final numbers', onclick: async () => {
+            if (!confirm(`End “${running.name}”? Its final numbers are kept for good.`)) return;
+            const e = await api('/events/end', { method: 'POST', body: {} });
+            if (!e.ok) return toast(e.error);
+            toast('Event ended. Final numbers saved.');
+            reportView(e.event.id);
+          } }))
+      : block('Start an event', nameIn, el('button', { class: 'primary big', type: 'button', text: 'Start', onclick: async () => {
+          const e = await api('/events/start', { method: 'POST', body: { name: nameIn.value } });
+          if (!e.ok) return toast(e.error);
+          toast(`“${e.event.name}” started.`);
+          load();
+        } }));
+    const past = r.events.filter((e) => e.ended_at);
+    body.replaceChildren(top, block('Past events', past.length
+      ? el('ul', { class: 'events-list' }, ...past.map((e) => el('li', {}, el('button', { type: 'button', onclick: () => reportView(e.id) },
+          el('strong', { text: e.name }),
+          el('small', { text: `${dateTime(e.started_at)} · ${e.summary?.counts.logged ?? 0} logged · ${e.summary?.counts.reentries ?? 0} re-entries` })))))
+      : el('p', { class: 'muted', text: 'None yet. End an event to keep its numbers here.' })));
+  }
+  await load();
+}
+
+async function reportView(id) {
+  const body = page('Event report');
+  $('[data-back]').onclick = () => (location.hash === '#/events' ? route() : go('events'));
+  const r = await api(`/events/${encodeURIComponent(id)}/report`);
+  if (!r.ok) return toast(r.error);
+  body.append(el('div', { class: 'event-bar' }, el('span', {}, document.createTextNode(`🏁 ${r.event.name}`),
+    el('small', { text: `${dateTime(r.event.started_at)} – ${r.event.ended_at ? clock(r.event.ended_at) : 'still running'}` }))));
+  await renderSummary(body, r.summary, false);
+  body.append(block('Spreadsheet', el('p', { class: 'muted', text: 'Every record from this event (kept for 30 days).' }),
+    el('a', { class: 'dl', href: `/api/app/events/${encodeURIComponent(id)}/records.csv`, download: '', text: '⬇️ Download spreadsheet' })));
+}
+
+async function settingsView() {
+  const body = page('Settings');
+  const r = await api('/settings');
+  if (!r.ok) return toast(r.error);
+  const st = r.settings;
+  const venue = el('input', { maxlength: '60', value: st.venue_name, placeholder: 'e.g. The Hydro' });
+  const policy = el('textarea', { rows: '6', maxlength: '4000', placeholder: 'e.g. Under 18s with alcohol: refuse and call a senior supervisor.' });
+  policy.value = st.policy;
+  const ai = el('input', { type: 'checkbox' });
+  ai.checked = st.ai_enabled;
+  body.append(block('General',
+    el('label', {}, document.createTextNode('Venue name'), venue),
+    el('label', {}, document.createTextNode('Refusal policy'), policy),
+    el('label', { class: 'switch' }, ai, document.createTextNode('AI helper (“describe in a sentence”)')),
+    el('button', { class: 'primary big', type: 'button', text: 'Save', onclick: async () => {
+      const s2 = await api('/settings', { method: 'PUT', body: { venue_name: venue.value, policy: policy.value, ai_enabled: ai.checked } });
+      if (!s2.ok) return toast(s2.error);
+      options = null; // the logging screen reads these
+      toast('Settings saved.');
+    } })));
+
+  const mapBox = el('div');
+  const upload = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif' });
+  upload.addEventListener('change', async () => {
+    const f = upload.files?.[0];
+    if (!f) return;
+    const res = await fetch('/api/app/map/image', { method: 'PUT', headers: { 'content-type': f.type }, body: f, credentials: 'same-origin' });
+    const d = await res.json().catch(() => ({}));
+    if (!d.ok) return toast(d.error || 'Upload failed.');
+    toast('Plan uploaded. Now tap where each section is.');
+    drawMap();
+  });
+  async function drawMap() {
+    const m = await api('/map');
+    if (!m.ok) return;
+    if (!m.has_image) return mapBox.replaceChildren(el('p', { class: 'muted', text: 'Upload a picture of the seating plan, then tap where each section is.' }));
+    mapBox.replaceChildren(
+      el('p', { class: 'muted hint', text: 'Tap the plan to place a section; tap a section to remove it.' }),
+      planView(m.blocks, null, async (t) => {
+        if (t.remove) {
+          if (!confirm(`Remove section ${t.remove} from the plan?`)) return;
+          await api(`/map/blocks/${encodeURIComponent(t.remove)}`, { method: 'DELETE' });
+        } else {
+          const name = prompt('Which section is here? (e.g. 313)');
+          if (!name) return;
+          const d = await api(`/map/blocks/${encodeURIComponent(name.trim().toUpperCase())}`, { method: 'PUT', body: { x: t.x, y: t.y } });
+          if (!d.ok) return toast(d.error);
+        }
+        drawMap();
+      }));
+  }
+  body.append(block('Seating plan', el('label', {}, document.createTextNode('Plan picture'), upload), mapBox));
+  drawMap();
+  body.append(block('People', el('button', { class: 'ghost big', type: 'button', text: '👥 Add people, PINs and roles', onclick: () => go('people') })));
+}
+
 // ---------------------------------------------------------------- routing
 
 function go(page) {
@@ -864,6 +1068,9 @@ async function route() {
   if (page === 'people' && me.role === 'superadmin') return peopleView();
   if (page === 'log') return logView();
   if (page === 'check') return checkView();
+  if (page === 'dashboard' && isAdmin()) return dashboardView();
+  if (page === 'events' && isAdmin()) return eventsView();
+  if (page === 'settings' && me.role === 'superadmin') return settingsView();
   if (page === 'feed') {
     connectStream();
     return feedView();
