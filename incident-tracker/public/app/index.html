@@ -156,6 +156,15 @@
       </div>
     </div>
 
+    <div class="block">
+      <h2>📸 Photos <span class="muted">(optional)</span></h2>
+      <div class="row-gap" style="margin-top:0">
+        <label class="scan-btn"><input type="file" accept="image/*" capture="environment" data-photo="person" hidden>🧍 Person</label>
+        <label class="scan-btn"><input type="file" accept="image/*" capture="environment" data-photo="ticket" hidden>🎫 Ticket</label>
+      </div>
+      <div class="thumbs" data-thumbs></div>
+    </div>
+
     <div class="savebar">
       <p class="hint" data-missing></p>
       <button type="button" class="primary big" data-save disabled>Save</button>
@@ -227,6 +236,7 @@
   </section>
 </template>
 
+<div class="viewer" id="viewer" hidden role="dialog" aria-modal="true" aria-label="Photos"></div>
 <script src="/app/app.js"></script>
 </body>
 </html>

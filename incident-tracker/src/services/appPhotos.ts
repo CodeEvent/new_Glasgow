@@ -47,7 +47,7 @@ export async function addPhoto(user: AppUser, ticketId: string, kindIn: unknown,
   // Count and add in one step, with the record locked, so photos sent at once can't pass the limit.
   const rows = await withTransaction(async (client) => {
     const locked = await client.query('SELECT 1 FROM tickets WHERE ticket_id = $1 FOR UPDATE', [ticketId]);
-    if (!locked.rowCount) throw new PhotoError('That record isn’t there any more.', 404);
+    if (!locked.rows.length) throw new PhotoError('That record isn’t there any more.', 404);
     const { rows: count } = await client.query<{ n: number }>('SELECT count(*)::int AS n FROM ticket_photos WHERE ticket_id = $1', [ticketId]);
     if (count[0].n >= MAX_PER_RECORD) throw new PhotoError(`This record already has ${MAX_PER_RECORD} photos.`, 409);
     return (

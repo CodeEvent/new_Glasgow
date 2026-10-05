@@ -168,6 +168,7 @@ function homeView() {
     tile('➕', 'Log someone', me.role === 'area' ? `Refused, 30 min or ejected at ${area(me.hub)}` : 'Refused, 30 min or ejected', { wide: true, go: () => go('log') }),
     tile('🔎', 'Check a seat', 'Is this ticket on record?', { go: () => go('check') }),
     tile('📡', 'Live feed', 'Every log, all areas, as it happens', { go: () => go('feed') }),
+    tile('❓', 'How to', 'Your cheat sheet', { go: () => go('help') }),
   );
   if (isAdmin()) {
     tiles.append(
@@ -524,6 +525,25 @@ async function logView() {
     );
   }
 
+  // Photos of the person or the ticket: kept on screen, sent after the log is saved.
+  const photos = [];
+  const thumbs = $('[data-thumbs]', root);
+  const drawThumbs = () => thumbs.replaceChildren(...photos.map((ph, i) =>
+    el('figure', {}, el('img', { src: ph.url, alt: ph.kind === 'person' ? 'Photo of the person' : 'Photo of the ticket' }),
+      el('figcaption', { text: ph.kind === 'person' ? 'Person' : 'Ticket' }),
+      el('button', { type: 'button', 'aria-label': 'Remove photo', text: '✕', onclick: () => { URL.revokeObjectURL(ph.url); photos.splice(i, 1); drawThumbs(); } }))));
+  for (const input of root.querySelectorAll('[data-photo]')) {
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      input.value = '';
+      if (!file) return;
+      if (photos.length >= 6) return toast('Up to 6 photos.');
+      const blob = await shrink(file).catch(() => file);
+      photos.push({ kind: input.dataset.photo, blob, url: URL.createObjectURL(blob) });
+      drawThumbs();
+    });
+  }
+
   // Ticket photo: the server reads the seat (and QR code).
   $('[data-scan]', root).addEventListener('change', async (e) => {
     const file = e.target.files?.[0];
@@ -600,7 +620,7 @@ async function logView() {
       res = await fetch('/api/app/logs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b), credentials: 'same-origin' });
     } catch {
       enqueue(b);
-      return resultView(b, null);
+      return resultView(b, null, photos.length ? '📸 Photos can’t be kept without signal: add them from the Live feed later.' : '');
     }
     const data = await res.json().catch(() => ({ ok: false, error: 'Something went wrong.' }));
     if (res.status === 401) {
@@ -616,8 +636,27 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js',
       toast(data.error);
       return refresh();
     }
-    resultView(b, data.results);
+    const note = photos.length ? await sendPhotos(data.results, photos) : '';
+    resultView(b, data.results, note);
   };
+}
+
+/** Sends the photos taken on the logging screen to every record just saved. Returns a line for the result card. */
+async function sendPhotos(results, photos) {
+  let sent = 0;
+  let failed = 0;
+  for (const r of results.filter((x) => !x.offline)) {
+    for (const ph of photos) {
+      try {
+        const res = await fetch(`/api/app/records/${encodeURIComponent(r.ticket_id)}/photos?kind=${ph.kind}`, { method: 'POST', headers: { 'content-type': ph.blob.type || 'image/jpeg' }, body: ph.blob, credentials: 'same-origin' });
+        if (res.ok) sent++;
+        else failed++;
+      } catch {
+        failed++;
+      }
+    }
+  }
+  return failed ? `📸 ${failed} photo${failed === 1 ? '' : 's'} not sent: add ${failed === 1 ? 'it' : 'them'} from the Live feed.` : sent ? `📸 ${photos.length} photo${photos.length === 1 ? '' : 's'} added.` : '';
 }
 
 /** Makes big phone photos small enough to send quickly on poor signal. */
@@ -629,7 +668,7 @@ async function shrink(file) {
   return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('no blob'))), 'image/jpeg', 0.85));
 }
 
-function resultView(sent, results) {
+function resultView(sent, results, note = '') {
   const root = show('#tpl-result');
   const card = $('[data-card]', root);
   const lines = $('[data-lines]', root);
@@ -650,9 +689,57 @@ function resultView(sent, results) {
     }
     if (results.some((r) => r.offline)) lines.append(el('p', { text: 'The server’s database was busy: kept on the server and synced shortly.' }));
   }
+  if (note) lines.append(el('p', { text: note }));
   $('[data-again]', root).onclick = () => logView();
   $('[data-home]', root).onclick = () => go('');
   if (navigator.vibrate) navigator.vibrate(results?.some((r) => r.reentry) ? [200, 100, 200] : 80);
+}
+
+// ---------------------------------------------------------------- photos on a record
+
+async function showPhotos(ticketId, seat) {
+  const v = $('#viewer');
+  const close = () => { v.hidden = true; v.replaceChildren(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => e.key === 'Escape' && close();
+  document.addEventListener('keydown', onKey);
+  const inner = el('div', { class: 'inner' }, el('div', { class: 'head' }, el('strong', { text: `📷 ${seat}` }), el('button', { type: 'button', text: 'Close', onclick: close })));
+  v.replaceChildren(inner);
+  v.hidden = false;
+  const r = await api(`/records/${encodeURIComponent(ticketId)}/photos`);
+  if (!r.ok) return inner.append(el('p', { text: r.error }));
+  if (!r.photos.length) inner.append(el('p', { text: 'No photos yet.' }));
+  for (const p of r.photos) {
+    inner.append(el('figure', {},
+      el('img', { src: `/api/app/photos/${p.id}`, alt: p.kind === 'person' ? `Photo of the person at ${seat}` : `Photo of the ticket for ${seat}` }),
+      el('figcaption', {}, el('span', { text: `${p.kind === 'person' ? '🧍 Person' : '🎫 Ticket'} · ${clock(p.at)}${p.by ? ` · ${p.by}` : ''}` }),
+        isAdmin() ? el('button', { type: 'button', text: 'Delete', onclick: async () => {
+          if (!confirm('Delete this photo?')) return;
+          const d = await api(`/photos/${p.id}`, { method: 'DELETE' });
+          if (!d.ok) return toast(d.error);
+          showPhotos(ticketId, seat);
+        } }) : null)));
+  }
+}
+
+/** A hidden camera input: take a photo and add it to a record. */
+function addPhotoButton(ticketId, kind, label, after) {
+  const input = el('input', { type: 'file', accept: 'image/*', capture: 'environment', hidden: true });
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    const blob = await shrink(file).catch(() => file);
+    try {
+      const res = await fetch(`/api/app/records/${encodeURIComponent(ticketId)}/photos?kind=${kind}`, { method: 'POST', headers: { 'content-type': blob.type || 'image/jpeg' }, body: blob, credentials: 'same-origin' });
+      const d = await res.json().catch(() => ({}));
+      if (!d.ok) return toast(d.error || 'Photo not added.');
+      toast('Photo added.');
+      after?.();
+    } catch {
+      toast('No signal: try again in a moment.');
+    }
+  });
+  return el('label', { class: 'ghost scan-btn' }, input, document.createTextNode(label));
 }
 
 // ---------------------------------------------------------------- check a seat
@@ -676,7 +763,8 @@ function checkView() {
             el('div', {}, el('span', { class: 'seat', text: rec.seat }), el('span', { class: 'tag', text: STATUS[rec.status] })),
             rec.reasoning ? el('div', { text: rec.reasoning }) : null,
             rec.description ? el('div', { text: `👤 ${rec.description}` }) : null,
-            el('small', { text: [recordText(rec), rec.party > 1 ? `group of ${rec.party}` : '', rec.reentries ? `🚨 tried again ×${rec.reentries}` : ''].filter(Boolean).join(' · ') })))),
+            el('small', { text: [recordText(rec), rec.party > 1 ? `group of ${rec.party}` : '', rec.reentries ? `🚨 tried again ×${rec.reentries}` : ''].filter(Boolean).join(' · ') }),
+            rec.photos ? el('div', { class: 'actions' }, el('button', { class: 'ghost', type: 'button', text: `📷 ${rec.photos} photo${rec.photos === 1 ? '' : 's'}`, onclick: () => showPhotos(rec.ticket_id, rec.seat) })) : null))),
     );
   });
   q.focus();
@@ -785,9 +873,10 @@ async function feedView() {
         i.reasoning ? el('div', { text: i.reasoning }) : null,
         i.description ? el('div', { text: `👤 ${i.description}` }) : null,
         el('small', { text: [`${area(i.hub)} · ${i.by}`, i.party > 1 ? `group of ${i.party}` : '', i.back_at && minsUntil(i.back_at) ? `back ${clock(i.back_at)} (${minsUntil(i.back_at)} min)` : ''].filter(Boolean).join(' · ') }),
-        i.can_edit || i.can_delete
-          ? el('div', { class: 'actions' }, el('button', { class: 'ghost', type: 'button', text: '✏️ Change', onclick: () => editView(i) }))
-          : null)));
+        el('div', { class: 'actions' },
+          i.photos ? el('button', { class: 'ghost', type: 'button', text: `📷 ${i.photos}`, 'aria-label': `${i.photos} photos`, onclick: () => showPhotos(i.ticket_id, i.seat) }) : null,
+          addPhotoButton(i.ticket_id, 'person', '📷 Add photo', () => feedRefresh?.()),
+          i.can_edit || i.can_delete ? el('button', { class: 'ghost', type: 'button', text: '✏️ Change', onclick: () => editView(i) }) : null))));
   }
   async function load() {
     const r = await api('/feed');
@@ -1056,6 +1145,65 @@ async function settingsView() {
   body.append(block('People', el('button', { class: 'ghost big', type: 'button', text: '👥 Add people, PINs and roles', onclick: () => go('people') })));
 }
 
+// ---------------------------------------------------------------- how to (a cheat sheet for your role)
+
+function helpView() {
+  const body = page('How to');
+  body.classList.add('help');
+  const sec = (title, items, tip) => block(title, el('ol', {}, ...items.map((t) => el('li', { text: t }))), tip ? el('p', { class: 'tip', text: tip }) : null);
+  const list = (title, items) => block(title, el('ul', {}, ...items.map((t) => el('li', { text: t }))));
+  const myArea = me.role === 'area' ? area(me.hub) : null;
+  body.append(el('p', { class: 'hello', text: me.role === 'area' ? `You’re an area supervisor for ${myArea}.` : me.role === 'senior' ? 'You’re a senior supervisor.' : 'You’re the superadmin.' }));
+  body.append(sec('Log someone', [
+    'Home → Log someone.',
+    'Tap Refused, 30 min or Ejected.',
+    'Type the seat: section, row, seat (313 YY 56). A group in one row: 205 206 207 or 205-207. Or tap 📷 Scan ticket.',
+    myArea ? `Your area (${myArea}) is already set.` : 'Tap the area: East, West, South or Hospitality.',
+    'Tap one or more reasons. Not on the list? Type it in “Something else”.',
+    'Optional: male/female, height, build, adult/minor, what they’re wearing, group size, and 📸 photos of the person or the ticket.',
+    'Tap Save. The button says exactly what it will save.',
+  ], 'A red warning while you type the seat means they’re already on record: saving logs a re-entry attempt. Do not admit.'));
+  body.append(list('Alerts', [
+    '🚨 Red banner, sound and vibration: someone tried to get back in. Do not admit.',
+    '🟡 Yellow banner: someone sent away for 30 minutes may now be readmitted if fit.',
+    'Tap the screen once after logging in so your phone allows the sound.',
+  ]));
+  body.append(list('Check and follow up', [
+    'Check a seat: a seat (313 YY 56), a row (313 L), a section (313) or words (green hat).',
+    'Live feed: every log from every area. Filter to your area or re-entries.',
+    '📷 Add photo on any record in the feed; 📷 n opens its photos.',
+    me.role === 'area'
+      ? '✏️ Change: only records only you logged, and only to make them more serious. For anything else, ask a senior supervisor.'
+      : '✏️ Change: any record. You can clear someone to come in, or delete a record or photo.',
+  ]));
+  body.append(list('No signal?', [
+    'Save as normal: it says “saved on this phone” and shows “1 waiting” at the top.',
+    'It’s sent automatically when signal returns. Treat the person as logged meanwhile.',
+    'Photos can’t wait without signal: add them from the Live feed later.',
+  ]));
+  if (isAdmin()) {
+    body.append(sec('Each event', [
+      'Before doors: Events & reports → name it (e.g. Celtic v Rangers) → Start.',
+      'During: Dashboard shows live counts, areas, reasons, hours and the seating plan.',
+      'After: Events & reports → End. The final numbers are kept for good.',
+      'Open a past event for its report and ⬇️ Download spreadsheet.',
+    ]));
+  }
+  if (me.role === 'superadmin') {
+    body.append(list('Superadmin', [
+      'People: add someone (name, role, area, 6-digit PIN), give a new PIN, switch off, Unlock after wrong PINs.',
+      'Settings: venue name, refusal policy, AI on/off, seating plan (upload, then tap where each section is).',
+      'Settings → Share the app: the address and QR code for supervisors. It changes when the venue phone restarts or updates.',
+      'On the venue phone: gk-url (address + QR), gk-status, gk-update, gk-log.',
+    ]));
+  }
+  body.append(list('Your login', [
+    'Name + 6-digit PIN, on the keypad. It lasts the shift (16 hours).',
+    '5 wrong PINs lock your name on this phone for 15 minutes; the superadmin can unlock you.',
+    'Sharing a phone? Log out first (top right).',
+  ]));
+}
+
 // ---------------------------------------------------------------- routing
 
 function go(page) {
@@ -1078,6 +1226,7 @@ async function route() {
   if (page === 'people' && me.role === 'superadmin') return peopleView();
   if (page === 'log') return logView();
   if (page === 'check') return checkView();
+  if (page === 'help') return helpView();
   if (page === 'dashboard' && isAdmin()) return dashboardView();
   if (page === 'events' && isAdmin()) return eventsView();
   if (page === 'settings' && me.role === 'superadmin') return settingsView();
