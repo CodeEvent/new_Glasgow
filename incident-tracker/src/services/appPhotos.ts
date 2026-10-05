@@ -1,4 +1,4 @@
-import { getPool } from '../db/pool';
+import { getPool, withTransaction } from '../db/pool';
 import { audit } from './accounts';
 import { emitAppEvent } from './appFeed';
 import { can, type AppUser } from './permissions';
@@ -44,12 +44,19 @@ export async function addPhoto(user: AppUser, ticketId: string, kindIn: unknown,
   if (!Buffer.isBuffer(data) || !data.length) throw new PhotoError('Send the photo.');
   if (data.length > MAX_PHOTO_BYTES) throw new PhotoError('That photo is too big (5 MB at most).', 413);
   const seat = await recordSeat(ticketId);
-  const { rows: count } = await getPool().query<{ n: number }>('SELECT count(*)::int AS n FROM ticket_photos WHERE ticket_id = $1', [ticketId]);
-  if (count[0].n >= MAX_PER_RECORD) throw new PhotoError(`This record already has ${MAX_PER_RECORD} photos.`, 409);
-  const { rows } = await getPool().query<{ id: string; created_at: Date }>(
-    'INSERT INTO ticket_photos (ticket_id, mime_type, data, kind, user_id, added_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at',
-    [ticketId, type, data, kind, user.id, user.name],
-  );
+  // Count and add in one step, with the record locked, so photos sent at once can't pass the limit.
+  const rows = await withTransaction(async (client) => {
+    const locked = await client.query('SELECT 1 FROM tickets WHERE ticket_id = $1 FOR UPDATE', [ticketId]);
+    if (!locked.rowCount) throw new PhotoError('That record isn’t there any more.', 404);
+    const { rows: count } = await client.query<{ n: number }>('SELECT count(*)::int AS n FROM ticket_photos WHERE ticket_id = $1', [ticketId]);
+    if (count[0].n >= MAX_PER_RECORD) throw new PhotoError(`This record already has ${MAX_PER_RECORD} photos.`, 409);
+    return (
+      await client.query<{ id: string; created_at: Date }>(
+        'INSERT INTO ticket_photos (ticket_id, mime_type, data, kind, user_id, added_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at',
+        [ticketId, type, data, kind, user.id, user.name],
+      )
+    ).rows;
+  });
   await audit(user, 'photo_added', `${seat} (${kind})`);
   emitAppEvent({ kind: 'change', seat, what: 'edited', by: user.name });
   return { id: rows[0].id, kind, at: new Date(rows[0].created_at).toISOString(), by: user.name };
@@ -70,7 +77,9 @@ export async function getPhoto(id: string): Promise<{ data: Buffer; mime: string
   if (!validId(id)) throw new PhotoError('Not found.', 404);
   const { rows } = await getPool().query<{ data: Buffer; mime_type: string }>('SELECT data, mime_type FROM ticket_photos WHERE id = $1', [id]);
   if (!rows[0]) throw new PhotoError('Not found.', 404);
-  return { data: rows[0].data, mime: rows[0].mime_type };
+  // Only real image types are served as images (older WhatsApp photos kept whatever type the sender claimed).
+  const mime = /^image\/(jpeg|png|webp|gif)$/i.test(rows[0].mime_type) ? rows[0].mime_type.toLowerCase() : 'application/octet-stream';
+  return { data: rows[0].data, mime };
 }
 
 export async function deletePhoto(user: AppUser, id: string): Promise<void> {

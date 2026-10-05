@@ -357,7 +357,7 @@ export class LinkedWhatsApp {
       let image: { data: Buffer; mime: string } | null = null;
       if (img) {
         try {
-          image = { data: await downloadCapped(msg, img.fileLength, MAX_PHOTO_BYTES), mime: img.mimetype ?? 'image/jpeg' };
+          image = { data: await downloadCapped(msg, img.fileLength, MAX_PHOTO_BYTES), mime: /^image\/(jpeg|png|webp|gif)$/i.test(img.mimetype ?? '') ? img.mimetype!.toLowerCase() : 'image/jpeg' }; // never trust a sender's type
         } catch (err) {
           if (err instanceof TooBigError) {
             await this.send(jid, { text: '⚠️ That photo is too big (max 8 MB). Send a normal photo or a screenshot.' }, { quoted: msg });

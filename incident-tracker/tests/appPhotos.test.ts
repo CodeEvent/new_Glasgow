@@ -83,6 +83,26 @@ describe.skipIf(!HAS_DB)('photos of the person or the ticket (PostgreSQL)', () =
     expect((await amy.get('/api/app/photos/00000000-0000-4000-8000-000000000000')).status).toBe(404);
   });
 
+  it('a stored file that isn’t a real image is never served as a page (no scripts)', async () => {
+    const { rows } = await getPool().query(
+      "INSERT INTO ticket_photos (ticket_id, mime_type, data) VALUES ($1, 'text/html', $2) RETURNING id",
+      [ticketId, Buffer.from('<script>fetch("/api/app/users")</script>')],
+    );
+    const r = await amy.get(`/api/app/photos/${rows[0].id}`);
+    expect(r.headers['content-type']).toBe('application/octet-stream');
+    expect(r.headers['content-security-policy']).toContain("default-src 'none'");
+    expect(r.headers['content-security-policy']).toContain('sandbox');
+    const ok = await amy.get(`/api/app/photos/${(await photo(amy)).body.photo.id}`);
+    expect(ok.headers['content-type']).toBe('image/jpeg');
+    expect(ok.headers['content-security-policy']).toContain('sandbox');
+  });
+
+  it('the 6-photo limit holds even when photos arrive at once', async () => {
+    const all = await Promise.all(Array.from({ length: 10 }, () => photo(amy)));
+    expect(all.filter((r) => r.status === 200)).toHaveLength(6);
+    expect((await getPool().query('SELECT count(*)::int AS n FROM ticket_photos')).rows[0].n).toBe(6);
+  });
+
   it('at most 6 photos per record', async () => {
     for (let i = 0; i < 6; i++) expect((await photo(amy)).status).toBe(200);
     expect((await photo(amy)).status).toBe(409);

@@ -441,6 +441,9 @@ appApiRouter.get(
     const p = await getPhoto(String(req.params.id));
     res.setHeader('content-type', p.mime);
     res.setHeader('cache-control', 'private, max-age=600');
+    // A photo is only ever an image: no scripts, nothing else loaded, even if opened on its own.
+    res.setHeader('content-security-policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox");
+    res.setHeader('content-disposition', 'inline');
     res.send(p.data);
   }),
 );
